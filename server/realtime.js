@@ -24,6 +24,10 @@ class Realtime {
     });
   }
 
+  isConnected(userId) {
+    return this.clients.has(userId);
+  }
+
   send(userId, type, data) {
     const set = this.clients.get(userId);
     if (!set) return;

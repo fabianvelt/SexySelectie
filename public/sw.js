@@ -1,7 +1,7 @@
 // Service worker: maakt de app installeerbaar en laat hem openen zonder netwerk.
 // Strategie: eerst netwerk (zodat je altijd de nieuwste versie krijgt), bij
 // geen verbinding de opgeslagen versie. De API wordt nooit gecachet.
-const CACHE = 'sexyselectie-v1';
+const CACHE = 'sexyselectie-v2';
 const SHELL = ['/', '/app.js', '/styles.css', '/legal.css', '/manifest.webmanifest', '/icons/icon-192.png', '/offline.html'];
 
 self.addEventListener('install', (event) => {
@@ -36,4 +36,38 @@ self.addEventListener('fetch', (event) => {
         return Response.error();
       }),
   );
+});
+
+// ---------- Pushmeldingen ----------
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { body: event.data?.text() };
+  }
+  event.waitUntil(self.registration.showNotification(data.title || 'SexySelectie', {
+    body: data.body || '',
+    tag: data.tag,
+    renotify: !!data.tag,
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    data: { url: data.url || '/' },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || '/';
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const open = windows.find((w) => new URL(w.url).origin === location.origin);
+    if (open) {
+      await open.focus();
+      open.postMessage({ type: 'navigate', url });
+      return;
+    }
+    await self.clients.openWindow(url);
+  })());
 });

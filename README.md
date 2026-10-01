@@ -27,6 +27,7 @@ npm start        # http://localhost:3000
 | API: account, tickets, ontdekken, swipen, matches, chat | `server/app.js` |
 | Ticketverificatie | `server/tickets.js` |
 | Realtime matches en berichten (Server-Sent Events) | `server/realtime.js` |
+| Pushmeldingen: Web Push, Firebase (Android), APNs (iPhone) | `server/push.js` |
 | Mobiele web-app (swipe-kaarten, QR-scanner, chat), PWA-manifest en service worker | `public/` |
 | Beheer: evenementen, ticketcodes, meldingen | `scripts/admin.js` |
 | Native iOS/Android-schil (Capacitor) | `android/`, `ios/`, `capacitor.config.json` |
@@ -93,6 +94,35 @@ npm run ios         # opent Xcode (alleen op een Mac) → Run, of Product → Ar
 
 Wat je daarvoor nodig hebt: Android Studio, en voor iOS een Mac met Xcode. Een Google Play-ontwikkelaarsaccount kost eenmalig $25, een Apple Developer-account $99 per jaar. De iconen en splashscreens staan in `assets/`. Na een nieuw icoon draai je `npx @capacitor/assets generate` en zet je daarna `public/manifest.webmanifest` terug, want het commando overschrijft dat bestand.
 
+## Pushmeldingen
+
+Je krijgt een melding bij een nieuwe match en bij een nieuw bericht, maar alleen als je de app niet open hebt (anders komt het al live binnen). De inhoud van een bericht staat bewust niet in de melding, omdat die op een vergrendeld scherm te zien is. Je zet meldingen aan of uit onder **Profiel**. Zolang ze uit staan, verschijnt er ook een herinnering bij **Matches**.
+
+Elk kanaal is optioneel. Wat je niet instelt, staat uit, en de server toont bij het opstarten welke kanalen actief zijn.
+
+**1. Web Push (PWA, Android en iPhone vanaf iOS 16.4 als de app op het beginscherm staat)**
+
+```bash
+npm run vapid                                   # maakt een publieke en een privésleutel
+fly secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... VAPID_SUBJECT=mailto:jij@example.com
+```
+
+**2. Android-app (Firebase Cloud Messaging)**
+1. Maak een gratis project op [console.firebase.google.com](https://console.firebase.google.com) en voeg een Android-app toe met pakketnaam `nl.sexyselectie.app`.
+2. Download `google-services.json` en zet hem in `android/app/`.
+3. Ga naar Projectinstellingen → Serviceaccounts → *Nieuwe privésleutel genereren* en zet die JSON als secret:
+   `fly secrets set FCM_SERVICE_ACCOUNT="$(base64 < serviceaccount.json | tr -d '\n')"`
+
+**3. iPhone-app (APNs)**
+1. Ga in je Apple Developer-account naar Certificates, IDs & Profiles → Keys → **+**, vink *Apple Push Notifications service* aan en download de `.p8`-sleutel.
+2. Zet in Xcode bij Signing & Capabilities je team. Push is al aangezet in `App.entitlements`.
+3. `fly secrets set APNS_KEY="$(base64 < AuthKey_XXXX.p8 | tr -d '\n')" APNS_KEY_ID=XXXX APNS_TEAM_ID=YYYY APNS_BUNDLE_ID=nl.sexyselectie.app APNS_PRODUCTION=true`
+   Gebruik `APNS_PRODUCTION=false` zolang je test met een build die je vanuit Xcode op je telefoon zet.
+
+## Ticketscanner
+
+In de iOS- en Android-app opent **Ticket scannen** de scanner van je telefoon (`@capacitor/barcode-scanner`). Die leest QR-codes en ook de barcodes die op veel e-tickets staan (pdf417, aztec, code128). In de browser of PWA gebruikt de app de camera via de browser: alle formaten op Android/Chrome, en op iPhone alleen QR-codes.
+
 ## Checklist voor de echte lancering
 
 - [ ] `privacy.html` en `voorwaarden.html` invullen (alles tussen [haken]) en juridisch laten nakijken.
@@ -100,7 +130,8 @@ Wat je daarvoor nodig hebt: Android Studio, en voor iOS een Mac met Xcode. Een G
 - [ ] Ticketcodes uitdelen via een organisator, of een echte ticketprovider koppelen (zie hierboven).
 - [ ] Back-ups van de database (bijvoorbeeld met Fly volume snapshots, die standaard dagelijks gemaakt worden).
 - [ ] Voor de stores: screenshots, een beschrijving, een leeftijdsclassificatie van 18+ en een demo-account voor de reviewers.
-- [ ] Apple keurt apps af die alleen een website tonen (richtlijn 4.2). Native pushmeldingen en de native camera-scanner (de volgende stap) helpen om goedgekeurd te worden.
+- [ ] Apple keurt apps af die alleen een website tonen (richtlijn 4.2). Native pushmeldingen en de native ticketscanner zitten er nu in, wat de kans op goedkeuring vergroot.
+- [ ] Pushmeldingen instellen (Firebase en APNs, zie hierboven) en testen op een echte telefoon.
 
 ## Instellingen
 
@@ -110,13 +141,14 @@ Wat je daarvoor nodig hebt: Android Studio, en voor iOS een Mac met Xcode. Een G
 | `DB_FILE` | Pad naar het SQLite-bestand (standaard `data/sexyselectie.db`) |
 | `TICKET_SECRET` | Geheim voor het ondertekenen van tickets, **verplicht** als `NODE_ENV=production` |
 | `NODE_ENV=production` | Zet ook `Secure`-cookies aan, dus draai dan achter HTTPS |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Web Push (optioneel) |
+| `FCM_SERVICE_ACCOUNT` | Firebase-serviceaccount als JSON of base64 (optioneel) |
+| `APNS_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION` | Apple-push (optioneel) |
 
 Camera-scannen werkt alleen via HTTPS of op `localhost`.
 
 ## Volgende stappen
 
-- Pushmeldingen bij een match of bericht (Capacitor Push + Firebase/APNs, en Web Push voor de PWA).
-- Native barcodescanner via een Capacitor-plugin (sneller, en leest ook pdf417/aztec).
 - Koppelingen met echte ticketproviders.
 - Meerdere foto's per profiel, opgeslagen in object storage in plaats van in de database.
 - Wachtwoord vergeten / e-mailverificatie.

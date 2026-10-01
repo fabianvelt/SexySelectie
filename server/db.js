@@ -89,6 +89,18 @@ CREATE TABLE IF NOT EXISTS reports (
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   handled_at  TEXT
 );
+
+-- Apparaten die pushmeldingen willen ontvangen. Voor web is token het
+-- PushSubscription-object als JSON, voor fcm/apns het apparaattoken.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         INTEGER PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('web', 'fcm', 'apns')),
+  token      TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (kind, token)
+);
+CREATE INDEX IF NOT EXISTS push_user ON push_subscriptions(user_id);
 `;
 
 function openDb(file = ':memory:') {

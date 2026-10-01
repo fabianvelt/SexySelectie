@@ -12,18 +12,22 @@
     "test": "node --no-warnings --test test/*.test.js",
     "cap:sync": "cap sync",
     "android": "cap open android",
-    "ios": "cap open ios"
+    "ios": "cap open ios",
+    "vapid": "web-push generate-vapid-keys"
   },
   "engines": {
     "node": ">=22.5"
   },
   "dependencies": {
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@capacitor/android": "^8.5.2",
+    "@capacitor/barcode-scanner": "^3.1.2",
     "@capacitor/cli": "^8.5.2",
     "@capacitor/core": "^8.5.2",
-    "@capacitor/ios": "^8.5.2"
+    "@capacitor/ios": "^8.5.2",
+    "@capacitor/push-notifications": "^8.1.2"
   }
 }

@@ -135,6 +135,174 @@ function resizePhoto(file) {
   });
 }
 
+// ---------- Native app (Capacitor) ----------
+// In de iOS/Android-app laadt Capacitor deze pagina en zet het een bridge klaar
+// op window.Capacitor. Plugins roepen we direct via die bridge aan.
+
+const Native = window.Capacitor?.isNativePlatform?.() ? window.Capacitor : null;
+const hasPlugin = (name) => !!Native?.PluginHeaders?.some((h) => h.name === name);
+const nativeCall = (plugin, method, options = {}) => Native.nativePromise(plugin, method, options);
+
+// ---------- Pushmeldingen ----------
+
+const PUSH_TOKEN_KEY = 'ss_push_token';
+let pendingRegistration = null;
+const store = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* privémodus */ } },
+  remove: (k) => { try { localStorage.removeItem(k); } catch { /* privémodus */ } },
+};
+
+function pushMode() {
+  if (Native && hasPlugin('PushNotifications')) return 'native';
+  if ('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window) return 'web';
+  return null;
+}
+
+const nativePushKind = () => (Native.getPlatform() === 'ios' ? 'apns' : 'fcm');
+
+function base64UrlToUint8Array(value) {
+  const base64 = (value + '='.repeat((4 - (value.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+}
+
+// 'on' | 'off' | 'denied' | 'install' (iPhone: eerst op beginscherm) | 'unavailable'
+async function pushStatus() {
+  const mode = pushMode();
+  if (!mode) return isIos() && !isStandalone() ? 'install' : 'unavailable';
+  const config = await api('/push/config').catch(() => null);
+  if (!config) return 'unavailable';
+
+  if (mode === 'native') {
+    if (!config.kinds.includes(nativePushKind())) return 'unavailable';
+    const { receive } = await nativeCall('PushNotifications', 'checkPermissions');
+    if (receive === 'denied') return 'denied';
+    return receive === 'granted' && store.get(PUSH_TOKEN_KEY) ? 'on' : 'off';
+  }
+
+  if (!config.webPublicKey) return 'unavailable';
+  if (Notification.permission === 'denied') return 'denied';
+  const reg = await navigator.serviceWorker.ready;
+  return (await reg.pushManager.getSubscription()) ? 'on' : 'off';
+}
+
+async function enablePush() {
+  if (pushMode() === 'native') {
+    const { receive } = await nativeCall('PushNotifications', 'requestPermissions');
+    if (receive !== 'granted') throw new Error('Meldingen staan uit in de instellingen van je telefoon');
+    // Het token komt los binnen via het 'registration'-event; daar wachten we op.
+    const registered = new Promise((resolve, reject) => {
+      pendingRegistration = { resolve, reject };
+      setTimeout(() => reject(new Error('Meldingen aanzetten duurde te lang, probeer het opnieuw')), 20000);
+    });
+    await nativeCall('PushNotifications', 'register');
+    await registered;
+    return;
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw new Error('Meldingen zijn niet toegestaan in je browser');
+  const { webPublicKey } = await api('/push/config');
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlToUint8Array(webPublicKey) });
+  await api('/push/subscribe', { method: 'POST', body: { kind: 'web', token: sub.toJSON() } });
+}
+
+// Haalt dit apparaat weg bij het account (bij uitzetten en bij uitloggen).
+async function disablePush() {
+  if (pushMode() === 'native') {
+    const token = store.get(PUSH_TOKEN_KEY);
+    if (token) await api('/push/unsubscribe', { method: 'POST', body: { token } }).catch(() => {});
+    store.remove(PUSH_TOKEN_KEY);
+    await nativeCall('PushNotifications', 'unregister').catch(() => {});
+    return;
+  }
+  if (pushMode() !== 'web') return;
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = await reg?.pushManager.getSubscription();
+  if (!sub) return;
+  await api('/push/unsubscribe', { method: 'POST', body: { token: sub.endpoint } }).catch(() => {});
+  await sub.unsubscribe();
+}
+
+// Na inloggen: koppel een bestaand abonnement van dit apparaat aan wie er nu ingelogd is.
+let pushSynced = false;
+async function syncPush() {
+  if (pushSynced) return;
+  pushSynced = true;
+  try {
+    if (pushMode() === 'native') {
+      const { receive } = await nativeCall('PushNotifications', 'checkPermissions');
+      if (receive === 'granted' && store.get(PUSH_TOKEN_KEY)) await nativeCall('PushNotifications', 'register');
+    } else if (pushMode() === 'web' && Notification.permission === 'granted') {
+      const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+      if (sub) await api('/push/subscribe', { method: 'POST', body: { kind: 'web', token: sub.toJSON() } });
+    }
+  } catch {
+    /* niet erg: dan zet de gebruiker het opnieuw aan */
+  }
+}
+
+if (Native && hasPlugin('PushNotifications')) {
+  Native.addListener('PushNotifications', 'registration', async ({ value }) => {
+    store.set(PUSH_TOKEN_KEY, value);
+    try {
+      if (state.me) await api('/push/subscribe', { method: 'POST', body: { kind: nativePushKind(), token: value } });
+      pendingRegistration?.resolve();
+    } catch (err) {
+      pendingRegistration?.reject(err);
+    }
+    pendingRegistration = null;
+  });
+  Native.addListener('PushNotifications', 'registrationError', () => {
+    const error = new Error('Meldingen aanzetten is mislukt');
+    if (pendingRegistration) pendingRegistration.reject(error);
+    else toast(error.message, true);
+    pendingRegistration = null;
+  });
+  Native.addListener('PushNotifications', 'pushNotificationActionPerformed', ({ notification }) => {
+    const url = notification?.data?.url;
+    if (url?.startsWith('/#/')) location.hash = url.slice(1);
+  });
+}
+
+// Tik op een webmelding terwijl de app al open is: de service worker stuurt de route door.
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (e.data?.type === 'navigate' && e.data.url?.startsWith('/#/')) location.hash = e.data.url.slice(1);
+});
+
+const PUSH_TEXT = {
+  on: ['Meldingen staan aan', 'Je krijgt een melding bij een nieuwe match of een nieuw bericht.', 'Uitzetten'],
+  off: ['Meldingen staan uit', 'Krijg een melding als je matcht of als iemand je een bericht stuurt.', 'Aanzetten'],
+  denied: ['Meldingen geblokkeerd', 'Zet meldingen voor SexySelectie aan in de instellingen van je telefoon of browser.', null],
+  install: ['Meldingen op iPhone', 'Zet de app eerst op je beginscherm (zie hieronder); daarna kun je meldingen aanzetten.', null],
+  unavailable: ['Meldingen niet beschikbaar', 'Meldingen werken op dit apparaat (nog) niet.', null],
+};
+
+async function renderPushCard(container) {
+  const status = await pushStatus().catch(() => 'unavailable');
+  const [title, text, action] = PUSH_TEXT[status];
+  container.innerHTML = `
+    <div class="card">
+      <strong>🔔 ${title}</strong>
+      <p class="muted" style="margin:6px 0 0">${text}</p>
+      ${action ? `<button class="${status === 'on' ? 'secondary' : ''} block" style="margin-top:12px" data-toggle>${action}</button>` : ''}
+    </div>`;
+  container.querySelector('[data-toggle]')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      if (status === 'on') {
+        await disablePush();
+      } else {
+        await enablePush();
+        toast('Meldingen staan aan 🔔');
+      }
+    } catch (err) {
+      toast(err.message, true);
+    }
+    renderPushCard(container);
+  });
+}
+
 // ---------- Realtime ----------
 
 function connectStream() {
@@ -178,6 +346,7 @@ function updateBadge() {
 
 function logoutLocal() {
   state.me = null;
+  pushSynced = false;
   state.stream?.close();
   state.stream = null;
   state.unread.clear();
@@ -213,7 +382,10 @@ async function router() {
     location.hash = '#/ontdek';
     return;
   }
-  if (state.me) connectStream();
+  if (state.me) {
+    connectStream();
+    syncPush();
+  }
 
   const render = routes[name];
   if (!render) {
@@ -510,7 +682,29 @@ function loadJsQR() {
   return jsQRPromise;
 }
 
+// Scanner van de iOS/Android-app zelf: sneller, en leest ook de barcodes die op
+// veel e-tickets staan (pdf417, aztec, code128), niet alleen QR-codes.
+async function nativeScan() {
+  const { ScanResult } = await nativeCall('CapacitorBarcodeScanner', 'scanBarcode', {
+    hint: 17, // alle formaten
+    scanInstructions: 'Richt je camera op de QR-code of barcode van je ticket',
+    scanOrientation: 1, // staand
+    android: { scanningLibrary: 'mlkit' },
+  });
+  return ScanResult || null;
+}
+
 async function openScanner() {
+  if (Native && hasPlugin('CapacitorBarcodeScanner')) {
+    try {
+      const code = await nativeScan();
+      if (code) await addTicket(code);
+    } catch (err) {
+      if (!/cancel/i.test(err.message)) toast(err.message, true);
+    }
+    return;
+  }
+
   const overlay = document.createElement('div');
   overlay.className = 'scanner';
   overlay.innerHTML = `
@@ -599,6 +793,7 @@ async function renderMatches() {
 
   view.innerHTML = `
     <h1>Matches</h1>
+    <div id="push-banner"></div>
     ${fresh.length ? `
       <h3 class="muted">Nieuwe matches</h3>
       <div class="new-matches">
@@ -613,6 +808,13 @@ async function renderMatches() {
           <p>${m.lastMessage.senderId === state.me.id ? 'Jij: ' : ''}${esc(m.lastMessage.body)}</p>
         </div>
       </a>`).join('')}`;
+
+  // Alleen een herinnering tonen als meldingen nog uit staan.
+  const banner = view.querySelector('#push-banner');
+  if ((await pushStatus().catch(() => null)) === 'off') {
+    banner.style.marginBottom = '16px';
+    renderPushCard(banner);
+  }
 }
 
 // ---------- Chat ----------
@@ -737,6 +939,7 @@ function renderProfile() {
       <p class="muted" style="margin:0">${esc(me.email)} · ${me.age} jaar</p>
       <button type="submit">Opslaan</button>
     </form>
+    <div id="push-card" style="margin-top:16px"></div>
     ${installHelp()}
     <div class="stack" style="margin-top:16px">
       <button class="secondary block" id="logout">Uitloggen</button>
@@ -770,11 +973,13 @@ function renderProfile() {
   });
 
   view.querySelector('#logout').addEventListener('click', async () => {
+    await disablePush().catch(() => {});
     await api('/logout', { method: 'POST' }).catch(() => {});
     logoutLocal();
   });
 
   bindInstallButton();
+  renderPushCard(view.querySelector('#push-card'));
 
   view.querySelector('#delete-account').addEventListener('click', () => {
     const el = sheet(`
@@ -806,7 +1011,7 @@ const isStandalone = () => matchMedia('(display-mode: standalone)').matches || n
 const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
 
 function installHelp() {
-  if (isStandalone()) return '';
+  if (isStandalone() || Native) return '';
   const how = isIos()
     ? 'Tik in Safari op <strong>Deel</strong> (□↑) en kies <strong>Zet op beginscherm</strong>.'
     : 'Open het browsermenu (⋮) en kies <strong>App installeren</strong> of <strong>Toevoegen aan startscherm</strong>.';

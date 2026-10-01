@@ -1,6 +1,7 @@
 const path = require('node:path');
 const { openDb } = require('./db');
 const { createApp } = require('./app');
+const { Push, sendersFromEnv } = require('./push');
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'sexyselectie.db');
@@ -12,8 +13,10 @@ if (!process.env.TICKET_SECRET && process.env.NODE_ENV === 'production') {
 }
 
 const db = openDb(DB_FILE);
-const app = createApp({ db, ticketSecret: TICKET_SECRET, secureCookies: process.env.NODE_ENV === 'production' });
+const push = new Push(db, sendersFromEnv(), { vapidPublicKey: process.env.VAPID_PUBLIC_KEY });
+const app = createApp({ db, ticketSecret: TICKET_SECRET, secureCookies: process.env.NODE_ENV === 'production', push });
 
 app.listen(PORT, () => {
   console.log(`SexySelectie draait op http://localhost:${PORT}`);
+  console.log(`Pushmeldingen: ${push.enabledKinds().join(', ') || 'uit (zie README)'}`);
 });

@@ -3,6 +3,7 @@ const express = require('express');
 const { hashPassword, verifyPassword, newSessionToken, hashToken } = require('./auth');
 const { verifyTicketCode, hashTicketCode } = require('./tickets');
 const { Realtime } = require('./realtime');
+const { Push } = require('./push');
 
 const SESSION_COOKIE = 'ss_session';
 const GENDERS = ['man', 'woman', 'nonbinary'];
@@ -79,12 +80,20 @@ function validateProfile(body, { partial = false } = {}) {
   return out;
 }
 
-function createApp({ db, ticketSecret, secureCookies = false }) {
+function createApp({ db, ticketSecret, secureCookies = false, push = new Push(db) }) {
   if (!ticketSecret) throw new Error('ticketSecret is verplicht');
 
   const app = express();
   const realtime = new Realtime();
   app.locals.realtime = realtime;
+  app.locals.push = push;
+
+  // Pushmelding alleen als de ontvanger de app niet open heeft; anders komt
+  // het bericht al realtime binnen.
+  function notify(userId, message) {
+    if (realtime.isConnected(userId)) return;
+    push.notify(userId, message).catch((err) => console.error('Push mislukt:', err));
+  }
 
   app.disable('x-powered-by');
   app.get('/healthz', (req, res) => res.send('ok'));
@@ -308,6 +317,12 @@ function createApp({ db, ticketSecret, secureCookies = false }) {
       const row = q('SELECT * FROM matches WHERE user_a = ? AND user_b = ?').get(a, b);
       match = { id: row.id, user: publicUser(target), sharedEvents: sharedEvents(me.id, target.id) };
       realtime.send(target.id, 'match', { id: row.id, user: publicUser(me), sharedEvents: match.sharedEvents });
+      notify(target.id, {
+        title: "It's a match! 🎉",
+        body: `Jij en ${me.name} gaan allebei naar ${match.sharedEvents.map((e) => e.name).join(' & ')}`,
+        url: `/#/chat/${row.id}`,
+        tag: `match-${row.id}`,
+      });
     }
     res.json({ match });
   });
@@ -349,6 +364,13 @@ function createApp({ db, ticketSecret, secureCookies = false }) {
     const message = messageJson(q('SELECT * FROM messages WHERE id = ?').get(lastInsertRowid));
     realtime.send(match.otherId, 'message', message);
     realtime.send(req.user.id, 'message', message);
+    // Bewust zonder de inhoud: meldingen zijn zichtbaar op een vergrendeld scherm.
+    notify(match.otherId, {
+      title: 'Nieuw bericht',
+      body: `${req.user.name} heeft je een bericht gestuurd`,
+      url: `/#/chat/${match.id}`,
+      tag: `chat-${match.id}`,
+    });
     res.status(201).json({ message });
   });
 
@@ -396,6 +418,39 @@ function createApp({ db, ticketSecret, secureCookies = false }) {
     }
     q('DELETE FROM users WHERE id = ?').run(me);
     res.clearCookie(SESSION_COOKIE, { path: '/' });
+    res.status(204).end();
+  });
+
+  // ---------- Pushmeldingen ----------
+
+  app.get('/api/push/config', requireUser, (req, res) => {
+    res.json({ webPublicKey: push.senders.web ? push.vapidPublicKey : null, kinds: push.enabledKinds() });
+  });
+
+  app.post('/api/push/subscribe', requireUser, (req, res) => {
+    const { kind } = req.body;
+    if (!['web', 'fcm', 'apns'].includes(kind)) throw new HttpError(400, 'Onbekend type');
+    let token = req.body.token;
+    if (kind === 'web') {
+      if (!token || typeof token !== 'object' || !/^https:\/\//.test(token.endpoint || '') || !token.keys?.p256dh || !token.keys?.auth) {
+        throw new HttpError(400, 'Ongeldig push-abonnement');
+      }
+      token = JSON.stringify({ endpoint: token.endpoint, keys: { p256dh: token.keys.p256dh, auth: token.keys.auth } });
+    } else if (typeof token !== 'string' || !/^[A-Za-z0-9:_\-.]{20,4096}$/.test(token)) {
+      throw new HttpError(400, 'Ongeldig apparaattoken');
+    }
+    push.subscribe(req.user.id, kind, token);
+    res.status(204).end();
+  });
+
+  app.post('/api/push/unsubscribe', requireUser, (req, res) => {
+    const token = typeof req.body.token === 'object' ? req.body.token?.endpoint : req.body.token;
+    if (typeof token !== 'string') throw new HttpError(400, 'Token ontbreekt');
+    // Web-abonnementen staan als JSON opgeslagen; zoek die op endpoint.
+    // CASE garandeert dat json_extract alleen op web-tokens (JSON) draait.
+    db.prepare(`DELETE FROM push_subscriptions WHERE user_id = ?
+                AND (token = ? OR CASE WHEN kind = 'web' THEN json_extract(token, '$.endpoint') END = ?)`)
+      .run(req.user.id, token, token);
     res.status(204).end();
   });
 
