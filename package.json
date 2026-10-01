@@ -1,0 +1,19 @@
+{
+  "name": "sexyselectie",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Swipe en match alleen met mensen die naar hetzelfde festival of feest gaan als jij — op basis van je gescande ticket.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "dev": "node --no-warnings --watch server/index.js",
+    "seed": "node --no-warnings scripts/seed.js",
+    "test": "node --no-warnings --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
