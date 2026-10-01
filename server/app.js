@@ -8,6 +8,7 @@ const SESSION_COOKIE = 'ss_session';
 const GENDERS = ['man', 'woman', 'nonbinary'];
 const INTERESTS = ['men', 'women', 'everyone'];
 const MAX_PHOTO_BYTES = 400 * 1024;
+const REPORT_REASONS = ['fake', 'inappropriate', 'harassment', 'underage', 'other'];
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -86,8 +87,14 @@ function createApp({ db, ticketSecret, secureCookies = false }) {
   app.locals.realtime = realtime;
 
   app.disable('x-powered-by');
+  app.get('/healthz', (req, res) => res.send('ok'));
   app.use(express.json({ limit: '1mb' }));
-  app.use(express.static(path.join(__dirname, '..', 'public')));
+  app.use(express.static(path.join(__dirname, '..', 'public'), {
+    setHeaders(res, file) {
+      // De service worker moet altijd vers opgehaald worden, anders blijven updates hangen.
+      if (file.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
 
   const q = (sql) => db.prepare(sql);
 
@@ -127,6 +134,20 @@ function createApp({ db, ticketSecret, secureCookies = false }) {
               JOIN events e ON e.id = a.event_id
               WHERE a.user_id = ? AND e.ends_at > ? ORDER BY e.starts_at`)
       .all(otherId, userId, new Date().toISOString());
+  }
+
+  function isBlocked(a, b) {
+    return !!q('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)')
+      .get(a, b, b, a);
+  }
+
+  function deleteMatchBetween(a, b) {
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const m = q('SELECT id FROM matches WHERE user_a = ? AND user_b = ?').get(lo, hi);
+    if (!m) return;
+    q('DELETE FROM matches WHERE id = ?').run(m.id);
+    realtime.send(a, 'unmatch', { id: m.id });
+    realtime.send(b, 'unmatch', { id: m.id });
   }
 
   function getMatchFor(matchId, userId) {
@@ -250,8 +271,10 @@ function createApp({ db, ticketSecret, secureCookies = false }) {
                           JOIN tickets t ON t.user_id = u.id AND t.event_id IN (${placeholders})
                           WHERE u.id != ?
                             AND u.id NOT IN (SELECT target_id FROM swipes WHERE swiper_id = ?)
+                            AND u.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id = ?)
+                            AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id = ?)
                           GROUP BY u.id`)
-      .all(...eventIds, me.id, me.id)
+      .all(...eventIds, me.id, me.id, me.id, me.id)
       .filter((u) => fitsInterest(me.interested_in, u.gender) && fitsInterest(u.interested_in, me.gender))
       .sort((a, b) => b.shared - a.shared || Math.random() - 0.5)
       .slice(0, 20);
@@ -268,6 +291,7 @@ function createApp({ db, ticketSecret, secureCookies = false }) {
     const liked = req.body.like === true;
     const target = Number.isInteger(targetId) && targetId !== me.id && q('SELECT * FROM users WHERE id = ?').get(targetId);
     if (!target) throw new HttpError(404, 'Profiel niet gevonden');
+    if (isBlocked(me.id, target.id)) throw new HttpError(404, 'Profiel niet gevonden');
     if (!sharedEvents(me.id, target.id).length) {
       throw new HttpError(403, 'Je kunt alleen swipen op mensen die naar hetzelfde evenement gaan');
     }
@@ -332,6 +356,46 @@ function createApp({ db, ticketSecret, secureCookies = false }) {
     const match = getMatchFor(Number(req.params.id), req.user.id);
     q('DELETE FROM matches WHERE id = ?').run(match.id);
     realtime.send(match.otherId, 'unmatch', { id: match.id });
+    res.status(204).end();
+  });
+
+  // ---------- Veiligheid ----------
+
+  app.post('/api/blocks', requireUser, (req, res) => {
+    const targetId = Number(req.body.userId);
+    if (!Number.isInteger(targetId) || targetId === req.user.id || !q('SELECT 1 FROM users WHERE id = ?').get(targetId)) {
+      throw new HttpError(404, 'Profiel niet gevonden');
+    }
+    q('INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)').run(req.user.id, targetId);
+    deleteMatchBetween(req.user.id, targetId);
+    res.status(204).end();
+  });
+
+  // Melden blokkeert meteen ook, zodat je de ander nooit meer hoeft te zien.
+  app.post('/api/reports', requireUser, (req, res) => {
+    const targetId = Number(req.body.userId);
+    if (!Number.isInteger(targetId) || targetId === req.user.id || !q('SELECT 1 FROM users WHERE id = ?').get(targetId)) {
+      throw new HttpError(404, 'Profiel niet gevonden');
+    }
+    if (!REPORT_REASONS.includes(req.body.reason)) throw new HttpError(400, 'Kies een reden');
+    const details = str(req.body.details ?? '', 'Toelichting', { max: 1000 });
+    q('INSERT INTO reports (reporter_id, reported_id, reason, details) VALUES (?, ?, ?, ?)')
+      .run(req.user.id, targetId, req.body.reason, details);
+    q('INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)').run(req.user.id, targetId);
+    deleteMatchBetween(req.user.id, targetId);
+    res.status(201).json({ ok: true });
+  });
+
+  app.delete('/api/me', requireUser, (req, res) => {
+    if (!verifyPassword(String(req.body?.password || ''), req.user.password_hash)) {
+      throw new HttpError(401, 'Wachtwoord klopt niet');
+    }
+    const me = req.user.id;
+    for (const m of q('SELECT * FROM matches WHERE user_a = ? OR user_b = ?').all(me, me)) {
+      realtime.send(m.user_a === me ? m.user_b : m.user_a, 'unmatch', { id: m.id });
+    }
+    q('DELETE FROM users WHERE id = ?').run(me);
+    res.clearCookie(SESSION_COOKIE, { path: '/' });
     res.status(204).end();
   });
 

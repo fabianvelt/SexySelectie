@@ -1,0 +1,19 @@
+{
+  "name": "SexySelectie",
+  "short_name": "SexySelectie",
+  "description": "Scan je ticket en match met mensen die naar hetzelfde festival of feest gaan.",
+  "id": "/",
+  "start_url": "/#/ontdek",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1622",
+  "theme_color": "#0b1622",
+  "lang": "nl",
+  "categories": ["social", "lifestyle", "entertainment"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -15,6 +15,13 @@ const state = {
 
 const GENDER_LABEL = { man: 'Man', woman: 'Vrouw', nonbinary: 'Non-binair' };
 const INTEREST_LABEL = { men: 'Mannen', women: 'Vrouwen', everyone: 'Iedereen' };
+const REPORT_REASONS = {
+  fake: 'Nepprofiel of oplichting',
+  inappropriate: 'Ongepaste foto of tekst',
+  harassment: 'Intimidatie of bedreiging',
+  underage: 'Lijkt jonger dan 18',
+  other: 'Iets anders',
+};
 
 // ---------- Helpers ----------
 
@@ -62,6 +69,37 @@ function formatTime(iso) {
 
 function formData(form) {
   return Object.fromEntries(new FormData(form).entries());
+}
+
+// Onderin uitschuivend paneel. Sluit bij tik op de achtergrond.
+function sheet(html) {
+  const el = document.createElement('div');
+  el.className = 'sheet-backdrop';
+  el.innerHTML = `<div class="sheet">${html}</div>`;
+  el.addEventListener('click', (e) => {
+    if (e.target === el || e.target.closest('[data-close]')) el.remove();
+  });
+  document.body.appendChild(el);
+  return el;
+}
+
+function openReport(user, onDone) {
+  const el = sheet(`
+    <h2>${esc(user.name)} melden</h2>
+    <p class="muted">We bekijken elke melding. ${esc(user.name)} krijgt niet te zien dat jij het was, en jullie zien elkaar niet meer terug.</p>
+    <form>
+      ${Object.entries(REPORT_REASONS).map(([v, l], i) => `
+        <label class="radio"><input type="radio" name="reason" value="${v}" ${i === 0 ? 'checked' : ''}> ${l}</label>`).join('')}
+      <label>Toelichting (optioneel)<textarea name="details" maxlength="1000"></textarea></label>
+      <button type="submit">Melden</button>
+      <button type="button" class="secondary" data-close>Annuleren</button>
+    </form>`);
+  onSubmit(el.querySelector('form'), async (data) => {
+    await api('/reports', { method: 'POST', body: { userId: user.id, ...data } });
+    el.remove();
+    toast('Bedankt voor je melding');
+    onDone();
+  });
 }
 
 function onSubmit(form, handler) {
@@ -190,7 +228,6 @@ async function router() {
 }
 
 window.addEventListener('hashchange', router);
-router();
 
 // ---------- Inloggen & registreren ----------
 
@@ -232,10 +269,13 @@ function renderRegister() {
         </label>
       </div>
       <label>Over jou<textarea name="bio" maxlength="300" placeholder="Welke acts mag je niet missen?"></textarea></label>
+      <label class="radio"><input type="checkbox" name="terms" required>
+        <span>Ik ben 18+, ga akkoord met de <a href="/voorwaarden.html" target="_blank">voorwaarden</a> en geef toestemming om mijn voorkeur te gebruiken zoals in de <a href="/privacy.html" target="_blank">privacyverklaring</a> staat</span></label>
       <button type="submit">Account maken</button>
     </form>
     <p class="center" style="margin-top:16px">Al een account? <a href="#/login" class="brand">Inloggen</a></p>`;
   onSubmit(view.querySelector('form'), async (data) => {
+    delete data.terms;
     state.me = (await api('/register', { method: 'POST', body: data })).user;
     toast('Welkom! Scan nu je eerste ticket 🎟️');
     location.hash = '#/tickets';
@@ -310,13 +350,24 @@ function renderDeck() {
       <div class="shade"></div>
       <div class="stamp like">LIKE</div>
       <div class="stamp nope">NOPE</div>
+      <button class="flag" data-report aria-label="Melden">⚑</button>
       <div class="info">
         <h2>${esc(p.name)} <small>${p.age}</small></h2>
         <div class="events">${p.sharedEvents.map((e) => `<span>🎪 ${esc(e.name)}</span>`).join('')}</div>
         ${p.bio ? `<p>${esc(p.bio)}</p>` : ''}
       </div>
     </div>`).join('');
-  enableDrag(deck.lastElementChild);
+  const top = deck.lastElementChild;
+  const flag = top.querySelector('[data-report]');
+  flag.addEventListener('pointerdown', (e) => e.stopPropagation());
+  flag.addEventListener('click', () => {
+    const profile = state.profiles[0];
+    openReport(profile, () => {
+      state.profiles = state.profiles.filter((p) => p.id !== profile.id);
+      renderDeck();
+    });
+  });
+  enableDrag(top);
 }
 
 function enableDrag(card) {
@@ -590,7 +641,7 @@ async function renderChat(matchId) {
           <strong>${esc(match.user.name)}, ${match.user.age}</strong>
           <small>🎪 ${esc(match.sharedEvents.map((e) => e.name).join(', ') || 'Geen gedeelde evenementen meer')}</small>
         </div>
-        <button class="link" data-unmatch>Unmatch</button>
+        <button class="link" data-menu aria-label="Opties">•••</button>
       </header>
       <div class="messages">
         <p class="intro">Jullie matchten via ${esc(match.sharedEvents[0]?.name || 'SexySelectie')}. Spreek af bij een podium! 🎶</p>
@@ -611,14 +662,36 @@ async function renderChat(matchId) {
   });
   form.querySelector('input').focus();
 
-  view.querySelector('[data-unmatch]').addEventListener('click', async () => {
-    if (!confirm(`Weet je zeker dat je ${match.user.name} wilt unmatchen? Jullie chat wordt verwijderd.`)) return;
-    try {
+  const leave = () => (location.hash = '#/matches');
+  view.querySelector('[data-menu]').addEventListener('click', () => {
+    const menu = sheet(`
+      <button class="secondary block" data-unmatch>Unmatchen</button>
+      <button class="secondary block" data-block>${esc(match.user.name)} blokkeren</button>
+      <button class="secondary block danger" data-report>${esc(match.user.name)} melden</button>
+      <button class="link block" data-close>Annuleren</button>`);
+    const run = (fn) => async () => {
+      try {
+        await fn();
+        menu.remove();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+    menu.querySelector('[data-unmatch]').addEventListener('click', run(async () => {
+      if (!confirm(`${match.user.name} unmatchen? Jullie chat wordt verwijderd.`)) return;
       await api(`/matches/${id}`, { method: 'DELETE' });
-      location.hash = '#/matches';
-    } catch (err) {
-      toast(err.message, true);
-    }
+      leave();
+    }));
+    menu.querySelector('[data-block]').addEventListener('click', run(async () => {
+      if (!confirm(`${match.user.name} blokkeren? Jullie zien elkaar nergens meer terug.`)) return;
+      await api('/blocks', { method: 'POST', body: { userId: match.user.id } });
+      toast(`${match.user.name} is geblokkeerd`);
+      leave();
+    }));
+    menu.querySelector('[data-report]').addEventListener('click', () => {
+      menu.remove();
+      openReport(match.user, leave);
+    });
   });
 }
 
@@ -664,7 +737,15 @@ function renderProfile() {
       <p class="muted" style="margin:0">${esc(me.email)} · ${me.age} jaar</p>
       <button type="submit">Opslaan</button>
     </form>
-    <button class="secondary block" style="margin-top:16px" id="logout">Uitloggen</button>`;
+    ${installHelp()}
+    <div class="stack" style="margin-top:16px">
+      <button class="secondary block" id="logout">Uitloggen</button>
+      <p class="center muted links">
+        <a href="/voorwaarden.html" target="_blank">Voorwaarden</a> ·
+        <a href="/privacy.html" target="_blank">Privacy</a> ·
+        <button class="link" id="delete-account">Account verwijderen</button>
+      </p>
+    </div>`;
 
   const preview = view.querySelector('#photo-preview');
   view.querySelector('input[type=file]').addEventListener('change', async (e) => {
@@ -692,4 +773,65 @@ function renderProfile() {
     await api('/logout', { method: 'POST' }).catch(() => {});
     logoutLocal();
   });
+
+  bindInstallButton();
+
+  view.querySelector('#delete-account').addEventListener('click', () => {
+    const el = sheet(`
+      <h2>Account verwijderen</h2>
+      <p class="muted">Je profiel, foto, tickets, matches en chats worden direct en definitief verwijderd. Dit kan niet ongedaan worden.</p>
+      <form>
+        <label>Bevestig met je wachtwoord<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit" class="danger">Definitief verwijderen</button>
+        <button type="button" class="secondary" data-close>Annuleren</button>
+      </form>`);
+    onSubmit(el.querySelector('form'), async ({ password }) => {
+      await api('/me', { method: 'DELETE', body: { password } });
+      el.remove();
+      logoutLocal();
+      toast('Je account is verwijderd');
+    });
+  });
 }
+
+// ---------- Installeren op je telefoon (PWA) ----------
+
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+});
+
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+function installHelp() {
+  if (isStandalone()) return '';
+  const how = isIos()
+    ? 'Tik in Safari op <strong>Deel</strong> (□↑) en kies <strong>Zet op beginscherm</strong>.'
+    : 'Open het browsermenu (⋮) en kies <strong>App installeren</strong> of <strong>Toevoegen aan startscherm</strong>.';
+  return `
+    <div class="card install" style="margin-top:16px">
+      <strong>📲 Zet SexySelectie op je beginscherm</strong>
+      <p class="muted" style="margin:6px 0 0">${how}</p>
+      ${isIos() ? '' : '<button class="block" id="install" style="margin-top:12px" hidden>Installeren</button>'}
+    </div>`;
+}
+
+function bindInstallButton() {
+  const button = view.querySelector('#install');
+  if (!button || !installPrompt) return;
+  button.hidden = false;
+  button.addEventListener('click', async () => {
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    renderProfile();
+  });
+}
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
+
+router();

@@ -69,6 +69,26 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS messages_match ON messages(match_id, id);
+
+-- Geblokkeerde mensen zien elkaar nergens meer terug, in beide richtingen.
+CREATE TABLE IF NOT EXISTS blocks (
+  blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (blocker_id, blocked_id)
+);
+
+-- Meldingen blijven bewaard als de melder het account verwijdert,
+-- zodat moderatie ze nog kan afhandelen.
+CREATE TABLE IF NOT EXISTS reports (
+  id          INTEGER PRIMARY KEY,
+  reporter_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reported_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reason      TEXT NOT NULL,
+  details     TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  handled_at  TEXT
+);
 `;
 
 function openDb(file = ':memory:') {

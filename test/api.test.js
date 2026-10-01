@@ -157,3 +157,40 @@ test('fitsInterest', () => {
   assert.ok(!fitsInterest('men', 'woman'));
   assert.ok(!fitsInterest('women', 'nonbinary'));
 });
+
+test('blokkeren verwijdert de match en verbergt elkaar', async () => {
+  const a = await newUser({ gender: 'man', interestedIn: 'women' });
+  const b = await newUser({ gender: 'woman', interestedIn: 'men' });
+  await a('POST', '/api/tickets', { code: ticket('fest-b', 'BLA') });
+  await b('POST', '/api/tickets', { code: ticket('fest-b', 'BLB') });
+  await a('POST', '/api/swipes', { targetId: b.user.id, like: true });
+  const { data } = await b('POST', '/api/swipes', { targetId: a.user.id, like: true });
+  assert.ok(data.match);
+
+  assert.equal((await b('POST', '/api/blocks', { userId: a.user.id })).status, 204);
+  assert.equal((await a('GET', '/api/matches')).data.matches.length, 0);
+  assert.equal((await a('GET', `/api/matches/${data.match.id}/messages`)).status, 404);
+  assert.equal((await a('POST', '/api/swipes', { targetId: b.user.id, like: true })).status, 404);
+});
+
+test('melden slaat een melding op en blokkeert', async () => {
+  const a = await newUser();
+  const b = await newUser();
+  await a('POST', '/api/tickets', { code: ticket('fest-a', 'REPA') });
+  await b('POST', '/api/tickets', { code: ticket('fest-a', 'REPB') });
+  assert.equal((await a('POST', '/api/reports', { userId: b.user.id, reason: 'onzin' })).status, 400);
+  assert.equal((await a('POST', '/api/reports', { userId: b.user.id, reason: 'fake', details: 'Nepfoto' })).status, 201);
+  const report = db.prepare('SELECT * FROM reports WHERE reported_id = ?').get(b.user.id);
+  assert.equal(report.reason, 'fake');
+  const seen = (await b('GET', '/api/discover')).data.profiles.map((p) => p.id);
+  assert.ok(!seen.includes(a.user.id), 'gemelde persoon ziet de melder niet meer');
+});
+
+test('account verwijderen vereist wachtwoord en wist alles', async () => {
+  const a = await newUser();
+  await a('POST', '/api/tickets', { code: ticket('fest-a', 'DEL') });
+  assert.equal((await a('DELETE', '/api/me', { password: 'fout' })).status, 401);
+  assert.equal((await a('DELETE', '/api/me', { password: 'wachtwoord' })).status, 204);
+  assert.equal((await a('GET', '/api/me')).status, 401);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tickets WHERE user_id = ?').get(a.user.id).n, 0);
+});

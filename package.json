@@ -8,12 +8,22 @@
     "start": "node --no-warnings server/index.js",
     "dev": "node --no-warnings --watch server/index.js",
     "seed": "node --no-warnings scripts/seed.js",
-    "test": "node --no-warnings --test test/*.test.js"
+    "admin": "node --no-warnings scripts/admin.js",
+    "test": "node --no-warnings --test test/*.test.js",
+    "cap:sync": "cap sync",
+    "android": "cap open android",
+    "ios": "cap open ios"
   },
   "engines": {
     "node": ">=22.5"
   },
   "dependencies": {
     "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/ios": "^8.5.2"
   }
 }

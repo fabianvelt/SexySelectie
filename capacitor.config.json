@@ -1,0 +1,16 @@
+{
+  "appId": "nl.sexyselectie.app",
+  "appName": "SexySelectie",
+  "webDir": "public",
+  "server": {
+    "url": "https://sexyselectie.fly.dev",
+    "cleartext": false
+  },
+  "backgroundColor": "#0b1622",
+  "ios": {
+    "contentInset": "never"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

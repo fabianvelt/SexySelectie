@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SexySelectie</string>
+    <string name="title_activity_main">SexySelectie</string>
+    <string name="package_name">nl.sexyselectie.app</string>
+    <string name="custom_url_scheme">nl.sexyselectie.app</string>
+</resources>
