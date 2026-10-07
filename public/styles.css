@@ -134,6 +134,22 @@ label.radio span { font-size: 13px; color: var(--muted); }
 .auth form { gap: 12px; }
 .auth .switch { margin-top: 20px; text-align: center; color: var(--muted); font-size: 15px; }
 .auth .switch a { color: var(--text); font-weight: 600; }
+.auth .switch .link { font-size: 15px; font-weight: 500; color: var(--muted); }
+.auth .back-link { margin-top: 4px; }
+.hero p strong { color: var(--text); font-weight: 600; }
+
+/* ---------- Code van 6 cijfers ---------- */
+.code-input {
+  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 30px; font-weight: 600;
+  letter-spacing: .45em; text-align: center; padding: 16px 0 16px .45em;
+}
+.code-input::placeholder { color: var(--muted); opacity: .35; }
+.verify { display: flex; flex-direction: column; gap: 10px; padding: 8px 0; }
+.verify h2 { font-size: 38px; margin: 4px 0 0; }
+.verify p strong { color: var(--text); font-weight: 600; }
+.verify form { margin-top: 6px; }
+.verify .switch { text-align: center; margin: 4px 0 0; }
+.verify .switch .link, .verify .switch a { font-size: 15px; font-weight: 500; color: var(--muted); }
 
 /* ---------- Tabbalk ---------- */
 #tabs {

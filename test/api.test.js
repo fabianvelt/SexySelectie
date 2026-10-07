@@ -17,7 +17,7 @@ before(async () => {
   ins.run('fest-a', 'Festival A', 'Park', 'Utrecht', days(3), days(5));
   ins.run('fest-b', 'Festival B', 'Hal', 'Rotterdam', days(10), days(11));
   ins.run('fest-old', 'Oud Festival', 'Veld', 'Groningen', days(-10), days(-8));
-  server = createApp({ db, ticketSecret: SECRET }).listen(0);
+  server = createApp({ db, ticketSecret: SECRET, mailer: { send: async () => {} } }).listen(0);
   await new Promise((r) => server.once('listening', r));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
@@ -59,6 +59,8 @@ async function newUser(overrides = {}) {
   });
   assert.equal(res.status, 201, JSON.stringify(res.data));
   c.user = res.data.user;
+  // E-mailbevestiging heeft eigen tests; hier slaan we die stap over.
+  db.prepare("UPDATE users SET email_verified_at = datetime('now') WHERE id = ?").run(c.user.id);
   return c;
 }
 

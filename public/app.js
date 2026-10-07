@@ -422,6 +422,10 @@ function logoutLocal() {
 const routes = {
   login: renderLogin,
   registreer: renderRegister,
+  'wachtwoord-vergeten': renderForgot,
+  'nieuw-wachtwoord': renderNewPassword,
+  bevestig: renderVerifyLink,
+  bevestigen: renderVerify,
   ontdek: renderDiscover,
   tickets: renderTickets,
   matches: renderMatches,
@@ -429,11 +433,27 @@ const routes = {
   profiel: renderProfile,
 };
 
+// Pagina's voor als je (nog) niet bent ingelogd.
+const PUBLIC_ROUTES = ['login', 'registreer', 'wachtwoord-vergeten', 'nieuw-wachtwoord'];
+// Werkt ingelogd én niet ingelogd: de link uit de bevestigingsmail kan in
+// een andere browser opengaan dan waar je bent ingelogd.
+const OPEN_ROUTES = ['bevestig'];
+// Pagina's zonder tabbalk, om je aandacht bij één ding te houden.
+const NO_TABS = ['chat', 'bevestig', 'bevestigen'];
+
+// /api/me zonder de automatische doorverwijzing naar het inlogscherm.
+async function loadMe() {
+  const res = await fetch('/api/me');
+  return res.ok ? (await res.json()).user : null;
+}
+
 async function router() {
   const [name = '', param] = location.hash.replace(/^#\/?/, '').split('/');
-  const publicRoute = name === 'login' || name === 'registreer';
+  const publicRoute = PUBLIC_ROUTES.includes(name);
 
-  if (!state.me && !publicRoute) {
+  if (OPEN_ROUTES.includes(name)) {
+    state.me ??= await loadMe();
+  } else if (!state.me && !publicRoute) {
     try {
       state.me = (await api('/me')).user;
     } catch {
@@ -456,7 +476,7 @@ async function router() {
     return;
   }
   state.chatMatchId = null;
-  tabs.hidden = publicRoute || name === 'chat';
+  tabs.hidden = publicRoute || !state.me || NO_TABS.includes(name);
   for (const a of tabs.querySelectorAll('a')) a.classList.toggle('active', a.dataset.tab === name);
   window.scrollTo(0, 0);
   await render(param);
@@ -478,7 +498,8 @@ function renderLogin() {
         <input name="password" type="password" autocomplete="current-password" placeholder="Wachtwoord" aria-label="Wachtwoord" required>
         <button type="submit" class="block">Inloggen</button>
       </form>
-      <p class="switch">Nog geen account? <a href="#/registreer">Maak er een</a></p>
+      <p class="switch"><a href="#/wachtwoord-vergeten">Wachtwoord vergeten?</a></p>
+      <p class="switch" style="margin-top:8px">Nog geen account? <a href="#/registreer">Maak er een</a></p>
     </div>`;
   onSubmit(view.querySelector('form'), async (data) => {
     state.me = (await api('/login', { method: 'POST', body: data })).user;
@@ -516,9 +537,155 @@ function renderRegister() {
   onSubmit(view.querySelector('form'), async (data) => {
     delete data.terms;
     state.me = (await api('/register', { method: 'POST', body: data })).user;
-    toast('Welkom. Scan nu je eerste ticket.');
-    location.hash = '#/tickets';
+    location.hash = '#/bevestigen';
   });
+}
+
+// ---------- Wachtwoord vergeten ----------
+
+function renderForgot() {
+  view.innerHTML = `
+    <div class="auth">
+      <a class="btn icon-btn back-link" href="#/login" aria-label="Terug">${icon('back')}</a>
+      <div class="hero" style="padding-top:24px">
+        <h1>Wachtwoord <em>vergeten?</em></h1>
+        <p>Vul je e-mailadres in. We sturen je een code waarmee je een nieuw wachtwoord kiest.</p>
+      </div>
+      <form>
+        <input name="email" type="email" autocomplete="email" placeholder="E-mailadres" aria-label="E-mailadres" required>
+        <button type="submit" class="block">Stuur code</button>
+      </form>
+    </div>`;
+  onSubmit(view.querySelector('form'), async ({ email }) => {
+    await api('/password/forgot', { method: 'POST', body: { email } });
+    renderResetWithCode(email.trim());
+  });
+}
+
+function renderResetWithCode(email) {
+  view.innerHTML = `
+    <div class="auth">
+      <a class="btn icon-btn back-link" href="#/login" aria-label="Terug">${icon('back')}</a>
+      <div class="hero" style="padding-top:24px">
+        <h1>Check je <em>mail</em></h1>
+        <p>Heeft <strong>${esc(email)}</strong> een account, dan staat er nu een code van 6 cijfers in je inbox. Kijk ook even bij spam.</p>
+      </div>
+      <form>
+        ${codeInput()}
+        <input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="Nieuw wachtwoord (min. 8 tekens)" aria-label="Nieuw wachtwoord" required>
+        <button type="submit" class="block">Wachtwoord opslaan</button>
+      </form>
+      <p class="switch"><button class="link" data-again>Geen mail gehad? Stuur opnieuw</button></p>
+    </div>`;
+  onSubmit(view.querySelector('form'), async ({ code, password }) => {
+    state.me = (await api('/password/reset', { method: 'POST', body: { email, code, password } })).user;
+    toast('Je nieuwe wachtwoord is opgeslagen');
+    location.hash = '#/ontdek';
+  });
+  view.querySelector('[data-again]').addEventListener('click', async () => {
+    await api('/password/forgot', { method: 'POST', body: { email } }).catch(() => {});
+    toast('Als je een account hebt, is er een nieuwe code onderweg');
+  });
+}
+
+// Via de link uit de mail: alleen nog een nieuw wachtwoord kiezen.
+function renderNewPassword(token) {
+  if (!token) {
+    location.hash = '#/wachtwoord-vergeten';
+    return;
+  }
+  view.innerHTML = `
+    <div class="auth">
+      <div class="hero">
+        <h1>Nieuw <em>wachtwoord</em></h1>
+        <p>Kies een wachtwoord van minstens 8 tekens. Daarna ben je meteen ingelogd.</p>
+      </div>
+      <form>
+        <input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="Nieuw wachtwoord" aria-label="Nieuw wachtwoord" required>
+        <button type="submit" class="block">Opslaan en inloggen</button>
+      </form>
+    </div>`;
+  onSubmit(view.querySelector('form'), async ({ password }) => {
+    state.me = (await api('/password/reset', { method: 'POST', body: { token, password } })).user;
+    toast('Je nieuwe wachtwoord is opgeslagen');
+    location.hash = '#/ontdek';
+  });
+}
+
+// ---------- E-mail bevestigen ----------
+
+function codeInput() {
+  return `<input class="code-input" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}"
+    maxlength="6" placeholder="000000" aria-label="Code van 6 cijfers" required>`;
+}
+
+// Kaart met code-invoer, ook gebruikt op Ontdek zolang je niet bevestigd bent.
+function verifyCard({ showLater = false } = {}) {
+  return `
+    <div class="verify">
+      <span class="eyebrow">Nog één stap</span>
+      <h2>Bevestig je <em>e-mail</em></h2>
+      <p class="muted">We stuurden een code van 6 cijfers naar <strong>${esc(state.me.email)}</strong>. Daarna zien anderen je en kun je swipen.</p>
+      <form>
+        ${codeInput()}
+        <button type="submit" class="block">Bevestigen</button>
+      </form>
+      <p class="switch"><button class="link" data-resend>Geen mail gehad? Stuur opnieuw</button></p>
+      ${showLater ? '<p class="switch" style="margin-top:4px"><a href="#/tickets">Eerst mijn ticket scannen</a></p>' : ''}
+    </div>`;
+}
+
+function bindVerifyCard(container, onDone) {
+  const form = container.querySelector('.verify form');
+  onSubmit(form, async ({ code }) => {
+    state.me = (await api('/email/verify', { method: 'POST', body: { code } })).user;
+    toast('Je e-mailadres is bevestigd');
+    onDone();
+  });
+  // Automatisch versturen zodra alle 6 cijfers er staan (ook bij plakken of autofill).
+  const input = form.querySelector('.code-input');
+  input.addEventListener('input', () => {
+    input.value = input.value.replace(/\D/g, '').slice(0, 6);
+    if (input.value.length === 6) form.requestSubmit();
+  });
+  container.querySelector('[data-resend]').addEventListener('click', async () => {
+    try {
+      await api('/email/resend', { method: 'POST' });
+      toast('Nieuwe code verstuurd');
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+}
+
+function renderVerify() {
+  if (state.me.emailVerified) {
+    location.hash = '#/ontdek';
+    return;
+  }
+  view.innerHTML = `<div class="auth" style="padding-top:40px">${verifyCard({ showLater: true })}</div>`;
+  bindVerifyCard(view, () => (location.hash = '#/tickets'));
+}
+
+async function renderVerifyLink(token) {
+  view.innerHTML = '<div class="empty"><p class="muted">Bezig met bevestigen…</p></div>';
+  let ok = true;
+  let message = '';
+  try {
+    const { user } = await api('/email/verify', { method: 'POST', body: { token } });
+    if (user) state.me = user;
+  } catch (err) {
+    ok = false;
+    message = err.message;
+  }
+  const next = state.me ? '#/ontdek' : '#/login';
+  view.innerHTML = ok
+    ? emptyState('heart', 'Bevestigd', state.me
+      ? 'Je e-mailadres is bevestigd. Anderen kunnen je nu zien.'
+      : 'Je e-mailadres is bevestigd. Ga terug naar de app of log hier in.',
+    `<a class="btn" href="${next}">${state.me ? 'Naar de app' : 'Inloggen'}</a>`)
+    : emptyState('x', 'Dat lukte niet', esc(message),
+      `<a class="btn" href="${state.me ? '#/bevestigen' : '#/login'}">${state.me ? 'Code invullen' : 'Inloggen'}</a>`);
 }
 
 // ---------- Ontdek (swipen) ----------
@@ -544,6 +711,12 @@ async function renderDiscover() {
     view.innerHTML = head + emptyState('ticket', 'Scan eerst je ticket',
       'Je ziet alleen mensen die naar hetzelfde festival of feest gaan als jij.',
       `<a class="btn" href="#/tickets">${icon('scan')} Ticket scannen</a>`);
+    return;
+  }
+
+  if (!state.me.emailVerified) {
+    view.innerHTML = head + verifyCard();
+    bindVerifyCard(view, renderDiscover);
     return;
   }
 
@@ -1029,7 +1202,7 @@ function renderProfile() {
         </label>
       </div>
       <label>Over jou<textarea name="bio" maxlength="300">${esc(me.bio)}</textarea></label>
-      <p class="muted" style="margin:0;font-size:13px">${esc(me.email)}</p>
+      <p class="muted" style="margin:0;font-size:13px">${esc(me.email)}${me.emailVerified ? '' : ' · <a href="#/bevestigen">nog niet bevestigd</a>'}</p>
       <button type="submit" class="block">Opslaan</button>
     </form>
     <div id="push-card" style="margin-top:16px"></div>

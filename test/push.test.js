@@ -23,7 +23,7 @@ before(async () => {
     return nextResult;
   };
   const push = new Push(db, { web: fake('web'), fcm: fake('fcm'), apns: fake('apns') }, { vapidPublicKey: 'PUBKEY' });
-  app = createApp({ db, ticketSecret: SECRET, push });
+  app = createApp({ db, ticketSecret: SECRET, push, mailer: { send: async () => {} } });
   server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -56,6 +56,7 @@ async function newUser(gender, interestedIn) {
     email: `push${n}@test.nl`, password: 'wachtwoord', name: `Push${n}`, birthdate: '1998-05-05', gender, interestedIn,
   });
   c.user = res.data.user;
+  db.prepare("UPDATE users SET email_verified_at = datetime('now') WHERE id = ?").run(c.user.id);
   await c('POST', '/api/tickets', { code: createTicketCode(SECRET, 'fest', `P${n}`) });
   return c;
 }

@@ -12,7 +12,7 @@ npm run seed     # demo-evenementen, demo-profielen en ticketcodes
 npm start        # http://localhost:3000
 ```
 
-1. Maak een account aan (18+).
+1. Maak een account aan (18+). De bevestigingscode staat in de terminal waar `npm start` draait.
 2. Ga naar **Tickets** en voer een van de ticketcodes in die `npm run seed` print (of zet hem in een QR-code en scan hem met je telefoon).
 3. Draai `npm run seed` nog een keer: de demo-profielen liken dan ook jou.
 4. Swipe op **Ontdek**. Een swipe naar rechts geeft direct een match, en daarna kun je chatten.
@@ -28,6 +28,7 @@ npm start        # http://localhost:3000
 | Ticketverificatie | `server/tickets.js` |
 | Realtime matches en berichten (Server-Sent Events) | `server/realtime.js` |
 | Pushmeldingen: Web Push, Firebase (Android), APNs (iPhone) | `server/push.js` |
+| E-mail (bevestigen, wachtwoord vergeten) via Resend | `server/mail.js` |
 | Mobiele web-app (swipe-kaarten, QR-scanner, chat), PWA-manifest en service worker | `public/` |
 | Beheer: evenementen, ticketcodes, meldingen | `scripts/admin.js` |
 | Native iOS/Android-schil (Capacitor) | `android/`, `ios/`, `capacitor.config.json` |
@@ -40,6 +41,8 @@ npm start        # http://localhost:3000
 - Een ticket kan maar door één account geclaimd worden. We bewaren alleen een hash van de ticketcode.
 - Alleen de twee mensen in een match kunnen de chat lezen. Bij unmatchen worden de berichten verwijderd.
 - Melden en blokkeren werkt in twee richtingen: jullie zien elkaar nergens meer terug. Een melding komt in de lijst van `npm run admin -- reports`.
+- Pas na het bevestigen van je e-mailadres ben je zichtbaar voor anderen en kun je swipen en chatten. Tickets scannen en je profiel invullen kan al eerder.
+- Codes uit mails zijn eenmalig, verlopen (bevestigen na 24 uur, wachtwoord na 30 minuten) en werken na 5 foute pogingen niet meer. Na 10 mislukte inlogpogingen wordt een e-mailadres een kwartier geblokkeerd.
 - Je kunt je account zelf verwijderen (Profiel → Account verwijderen). Dat wist direct al je gegevens, wat Apple, Google en de AVG verplicht stellen.
 
 ## Tickets: wat nu nog nep is
@@ -73,6 +76,7 @@ npm run admin -- events
 npm run admin -- tickets mijnfestival-2027 500 > codes.csv   # ticketcodes om als QR-code uit te delen
 npm run admin -- reports                                  # open meldingen
 npm run admin -- handle-report 3
+npm run admin -- verify-user iemand@example.com           # e-mailadres handmatig bevestigen
 npm run admin -- delete-user iemand@example.com
 ```
 
@@ -93,6 +97,20 @@ npm run ios         # opent Xcode (alleen op een Mac) → Run, of Product → Ar
 ```
 
 Wat je daarvoor nodig hebt: Android Studio, en voor iOS een Mac met Xcode. Een Google Play-ontwikkelaarsaccount kost eenmalig $25, een Apple Developer-account $99 per jaar. De iconen en splashscreens staan in `assets/`. Na een nieuw icoon draai je `npx @capacitor/assets generate` en zet je daarna `public/manifest.webmanifest` terug, want het commando overschrijft dat bestand.
+
+## E-mail
+
+Na het registreren krijg je een mail met een code van 6 cijfers en een link om je e-mailadres te bevestigen. Via *Wachtwoord vergeten?* op het inlogscherm krijg je een code om een nieuw wachtwoord te kiezen. Daarmee worden al je andere sessies uitgelogd. De code werkt ook in de geïnstalleerde app; een link uit een mail opent op iPhone vaak in Safari in plaats van in de app.
+
+Zonder instellingen komen de mails in de serverlog (`fly logs`), handig om lokaal te testen. Om echt te mailen gebruik je [Resend](https://resend.com) (gratis tot 3000 mails per maand):
+
+1. Maak een account aan en voeg onder *Domains* je eigen domein toe (bijv. `sexyselectie.nl`). Zet de DNS-records die Resend toont bij je domeinprovider. Zonder eigen domein kun je alleen naar je eigen adres mailen.
+2. Maak onder *API Keys* een sleutel aan en zet die op de server:
+   ```bash
+   fly secrets set RESEND_API_KEY=re_... MAIL_FROM="SexySelectie <hallo@sexyselectie.nl>" APP_URL=https://<appnaam>.fly.dev
+   ```
+
+Wil je in een eerste testronde met vrienden even zonder bevestiging werken? Zet dan `REQUIRE_EMAIL_VERIFICATION=false`. Een enkel account bevestig je met de hand via `npm run admin -- verify-user iemand@example.com`.
 
 ## Pushmeldingen
 
@@ -132,6 +150,7 @@ In de iOS- en Android-app opent **Ticket scannen** de scanner van je telefoon (`
 - [ ] Voor de stores: screenshots, een beschrijving, een leeftijdsclassificatie van 18+ en een demo-account voor de reviewers.
 - [ ] Apple keurt apps af die alleen een website tonen (richtlijn 4.2). Native pushmeldingen en de native ticketscanner zitten er nu in, wat de kans op goedkeuring vergroot.
 - [ ] Pushmeldingen instellen (Firebase en APNs, zie hierboven) en testen op een echte telefoon.
+- [ ] Resend instellen met je eigen domein (zie *E-mail*), zodat bevestigings- en wachtwoordmails echt aankomen.
 
 ## Instellingen
 
@@ -144,6 +163,9 @@ In de iOS- en Android-app opent **Ticket scannen** de scanner van je telefoon (`
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Web Push (optioneel) |
 | `FCM_SERVICE_ACCOUNT` | Firebase-serviceaccount als JSON of base64 (optioneel) |
 | `APNS_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION` | Apple-push (optioneel) |
+| `RESEND_API_KEY`, `MAIL_FROM` | E-mail via Resend; zonder sleutel komen mails in de log |
+| `APP_URL` | Adres van de app voor links in mails (bijv. `https://sexyselectie.fly.dev`) |
+| `REQUIRE_EMAIL_VERIFICATION` | `false` om e-mailbevestiging tijdelijk uit te zetten (standaard aan) |
 
 Camera-scannen werkt alleen via HTTPS of op `localhost`.
 
@@ -151,5 +173,4 @@ Camera-scannen werkt alleen via HTTPS of op `localhost`.
 
 - Koppelingen met echte ticketproviders.
 - Meerdere foto's per profiel, opgeslagen in object storage in plaats van in de database.
-- Wachtwoord vergeten / e-mailverificatie.
 - "Wie is er nu op het terrein": een check-in op de dag zelf.

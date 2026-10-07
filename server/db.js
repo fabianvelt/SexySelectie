@@ -101,7 +101,33 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   UNIQUE (kind, token)
 );
 CREATE INDEX IF NOT EXISTS push_user ON push_subscriptions(user_id);
+
+-- Eenmalige codes om je e-mailadres te bevestigen of je wachtwoord opnieuw in
+-- te stellen. Elke code werkt ook als link (link_hash). Per gebruiker en doel
+-- is er maximaal één geldig.
+CREATE TABLE IF NOT EXISTS email_codes (
+  id         INTEGER PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose    TEXT NOT NULL CHECK (purpose IN ('verify', 'reset')),
+  code_hash  TEXT NOT NULL,
+  link_hash  TEXT NOT NULL UNIQUE,
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  UNIQUE (user_id, purpose)
+);
 `;
+
+// Kolommen die later zijn toegevoegd. CREATE TABLE IF NOT EXISTS voegt ze niet
+// toe aan een bestaande database, dus dat doen we hier.
+function migrate(db) {
+  const userColumns = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!userColumns.includes('email_verified_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN email_verified_at TEXT');
+    // Accounts van vóór e-mailbevestiging niet ineens blokkeren.
+    db.exec('UPDATE users SET email_verified_at = created_at');
+  }
+}
 
 function openDb(file = ':memory:') {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -109,6 +135,7 @@ function openDb(file = ':memory:') {
   db.exec('PRAGMA foreign_keys = ON;');
   if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
   db.exec(SCHEMA);
+  migrate(db);
   return db;
 }
 

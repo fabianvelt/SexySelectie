@@ -6,6 +6,7 @@
 //   npm run admin -- reports                           (open meldingen)
 //   npm run admin -- handle-report <id>
 //   npm run admin -- delete-user <e-mail>
+//   npm run admin -- verify-user <e-mail>             (e-mailadres handmatig bevestigen)
 
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -75,11 +76,17 @@ switch (command) {
     console.log(changes ? 'Melding afgehandeld.' : 'Melding niet gevonden.');
     break;
   }
+  case 'verify-user': {
+    const { changes } = db.prepare("UPDATE users SET email_verified_at = COALESCE(email_verified_at, datetime('now')) WHERE email = ?")
+      .run(String(args[0] || '').toLowerCase());
+    console.log(changes ? 'E-mailadres bevestigd.' : 'Gebruiker niet gevonden.');
+    break;
+  }
   case 'delete-user': {
     const { changes } = db.prepare('DELETE FROM users WHERE email = ?').run(String(args[0] || '').toLowerCase());
     console.log(changes ? 'Gebruiker verwijderd.' : 'Gebruiker niet gevonden.');
     break;
   }
   default:
-    console.log('Commando\'s: events, add-event, tickets, reports, handle-report, delete-user (zie scripts/admin.js)');
+    console.log('Commando\'s: events, add-event, tickets, reports, handle-report, verify-user, delete-user (zie scripts/admin.js)');
 }

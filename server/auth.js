@@ -21,4 +21,9 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-module.exports = { hashPassword, verifyPassword, newSessionToken, hashToken };
+// Zescijferige code voor in een mail, bijv. "042917".
+function newCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+}
+
+module.exports = { hashPassword, verifyPassword, newSessionToken, hashToken, newCode };

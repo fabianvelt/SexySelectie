@@ -1,15 +1,21 @@
 const path = require('node:path');
 const express = require('express');
-const { hashPassword, verifyPassword, newSessionToken, hashToken } = require('./auth');
+const { hashPassword, verifyPassword, newSessionToken, hashToken, newCode } = require('./auth');
 const { verifyTicketCode, hashTicketCode } = require('./tickets');
 const { Realtime } = require('./realtime');
 const { Push } = require('./push');
+const { createMailer, verifyEmail, resetEmail } = require('./mail');
 
 const SESSION_COOKIE = 'ss_session';
 const GENDERS = ['man', 'woman', 'nonbinary'];
 const INTERESTS = ['men', 'women', 'everyone'];
 const MAX_PHOTO_BYTES = 600 * 1024;
 const REPORT_REASONS = ['fake', 'inappropriate', 'harassment', 'underage', 'other'];
+const CODE_TTL = { verify: 24 * 60 * 60 * 1000, reset: 30 * 60 * 1000 };
+const CODE_MAX_ATTEMPTS = 5;
+const CODE_RESEND_AFTER_MS = 60 * 1000;
+const LOGIN_MAX_FAILURES = 10;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -37,7 +43,13 @@ function publicUser(u) {
 }
 
 function privateUser(u) {
-  return { ...publicUser(u), email: u.email, birthdate: u.birthdate, interestedIn: u.interested_in };
+  return {
+    ...publicUser(u),
+    email: u.email,
+    emailVerified: !!u.email_verified_at,
+    birthdate: u.birthdate,
+    interestedIn: u.interested_in,
+  };
 }
 
 function parseCookies(header = '') {
@@ -80,10 +92,20 @@ function validateProfile(body, { partial = false } = {}) {
   return out;
 }
 
-function createApp({ db, ticketSecret, secureCookies = false, push = new Push(db) }) {
+function createApp({
+  db,
+  ticketSecret,
+  secureCookies = false,
+  push = new Push(db),
+  mailer = createMailer({}),
+  appUrl = null,
+  requireVerifiedEmail = true,
+}) {
   if (!ticketSecret) throw new Error('ticketSecret is verplicht');
 
   const app = express();
+  // Achter de proxy van de host (Fly.io) klopt req.protocol dan ook.
+  app.set('trust proxy', 1);
   const realtime = new Realtime();
   app.locals.realtime = realtime;
   app.locals.push = push;
@@ -119,14 +141,89 @@ function createApp({ db, ticketSecret, secureCookies = false, push = new Push(db
     });
   }
 
-  function requireUser(req, res, next) {
+  function currentUser(req) {
     const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     const user = token &&
       q('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?').get(hashToken(token));
-    if (!user) return next(new HttpError(401, 'Niet ingelogd'));
+    if (!user) return null;
     req.user = user;
     req.sessionTokenHash = hashToken(token);
-    next();
+    return user;
+  }
+
+  function requireUser(req, res, next) {
+    next(currentUser(req) ? undefined : new HttpError(401, 'Niet ingelogd'));
+  }
+
+  // Zonder bevestigd e-mailadres kun je je profiel en tickets regelen, maar
+  // niet swipen of chatten. Dat houdt nepaccounts buiten de deur.
+  function requireVerified(user) {
+    if (requireVerifiedEmail && !user.email_verified_at) {
+      throw new HttpError(403, 'Bevestig eerst je e-mailadres');
+    }
+  }
+
+  // ---------- Codes per e-mail ----------
+
+  const codeHash = (userId, purpose, code) => hashToken(`${userId}:${purpose}:${code}`);
+  const baseUrl = (req) => (appUrl || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+
+  // Maakt een nieuwe code (de vorige vervalt) en mailt hem. De mail gaat op de
+  // achtergrond, zodat een trage maildienst de app niet ophoudt.
+  function sendCode(req, user, purpose) {
+    const code = newCode();
+    const linkToken = newSessionToken();
+    q(`INSERT OR REPLACE INTO email_codes (user_id, purpose, code_hash, link_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?)`)
+      .run(user.id, purpose, codeHash(user.id, purpose, code), hashToken(linkToken),
+        new Date(Date.now() + CODE_TTL[purpose]).toISOString());
+    const route = purpose === 'verify' ? 'bevestig' : 'nieuw-wachtwoord';
+    const content = (purpose === 'verify' ? verifyEmail : resetEmail)({
+      name: user.name,
+      code,
+      link: `${baseUrl(req)}/#/${route}/${linkToken}`,
+    });
+    mailer.send({ to: user.email, ...content }).catch((err) => console.error('Mail versturen mislukt:', err.message));
+  }
+
+  function recentlySent(userId, purpose) {
+    const row = q('SELECT created_at FROM email_codes WHERE user_id = ? AND purpose = ?').get(userId, purpose);
+    return row && Date.now() - Date.parse(row.created_at) < CODE_RESEND_AFTER_MS;
+  }
+
+  // Controleert een code (van een gebruiker) of een link-token. Geeft de
+  // gebruiker terug en laat de code direct vervallen.
+  function useCode(purpose, { userId, code, token }) {
+    const now = new Date().toISOString();
+    let row;
+    if (token) {
+      row = q('SELECT * FROM email_codes WHERE link_hash = ? AND purpose = ?').get(hashToken(String(token)), purpose);
+      if (!row || row.expires_at < now) throw new HttpError(400, 'Deze link is verlopen of al gebruikt. Vraag een nieuwe code aan.');
+    } else {
+      row = userId && q('SELECT * FROM email_codes WHERE user_id = ? AND purpose = ?').get(userId, purpose);
+      if (!row || row.expires_at < now) throw new HttpError(400, 'Deze code is verlopen. Vraag een nieuwe aan.');
+      if (row.attempts >= CODE_MAX_ATTEMPTS) throw new HttpError(429, 'Te vaak geprobeerd. Vraag een nieuwe code aan.');
+      if (row.code_hash !== codeHash(userId, purpose, String(code || '').replace(/\s/g, ''))) {
+        q('UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?').run(row.id);
+        throw new HttpError(400, 'Deze code klopt niet');
+      }
+    }
+    q('DELETE FROM email_codes WHERE id = ?').run(row.id);
+    return q('SELECT * FROM users WHERE id = ?').get(row.user_id);
+  }
+
+  // Eenvoudige rem op wachtwoord raden: te veel mislukte pogingen per e-mailadres.
+  const loginFailures = new Map();
+  function checkLoginAllowed(email) {
+    const entry = loginFailures.get(email);
+    if (entry && Date.now() - entry.first < LOGIN_WINDOW_MS && entry.count >= LOGIN_MAX_FAILURES) {
+      throw new HttpError(429, 'Te veel pogingen. Probeer het over een kwartier opnieuw of kies een nieuw wachtwoord.');
+    }
+  }
+  function recordLoginFailure(email) {
+    const entry = loginFailures.get(email);
+    if (!entry || Date.now() - entry.first >= LOGIN_WINDOW_MS) loginFailures.set(email, { first: Date.now(), count: 1 });
+    else entry.count++;
   }
 
   // Events waarvoor de gebruiker een ticket heeft en die nog niet voorbij zijn.
@@ -192,18 +289,72 @@ function createApp({ db, ticketSecret, secureCookies = false, push = new Push(db
         profile.bio, profile.photo ?? null);
     const user = q('SELECT * FROM users WHERE id = ?').get(lastInsertRowid);
     startSession(res, user.id);
+    sendCode(req, user, 'verify');
     res.status(201).json({ user: privateUser(user) });
   });
 
   app.post('/api/login', (req, res) => {
     const email = String(req.body.email || '').trim().toLowerCase();
     const password = String(req.body.password || '');
+    checkLoginAllowed(email);
     const user = q('SELECT * FROM users WHERE email = ?').get(email);
     if (!user || !verifyPassword(password, user.password_hash)) {
+      recordLoginFailure(email);
       throw new HttpError(401, 'E-mail of wachtwoord klopt niet');
     }
+    loginFailures.delete(email);
     startSession(res, user.id);
     res.json({ user: privateUser(user) });
+  });
+
+  // ---------- E-mail bevestigen ----------
+
+  // Met een code (ingelogd) of met de link uit de mail (ook als je in een
+  // andere browser zit dan waar je bent ingelogd).
+  app.post('/api/email/verify', (req, res) => {
+    const me = currentUser(req);
+    if (!req.body.token && !me) throw new HttpError(401, 'Niet ingelogd');
+    const user = useCode('verify', { userId: me?.id, code: req.body.code, token: req.body.token });
+    q("UPDATE users SET email_verified_at = COALESCE(email_verified_at, datetime('now')) WHERE id = ?").run(user.id);
+    const fresh = q('SELECT * FROM users WHERE id = ?').get(user.id);
+    res.json({ user: me?.id === fresh.id ? privateUser(fresh) : null });
+  });
+
+  app.post('/api/email/resend', requireUser, (req, res) => {
+    if (req.user.email_verified_at) throw new HttpError(400, 'Je e-mailadres is al bevestigd');
+    if (recentlySent(req.user.id, 'verify')) throw new HttpError(429, 'We hebben net een mail gestuurd. Probeer het over een minuut opnieuw.');
+    sendCode(req, req.user, 'verify');
+    res.status(204).end();
+  });
+
+  // ---------- Wachtwoord vergeten ----------
+
+  // Antwoordt altijd hetzelfde, zodat niemand kan uitzoeken welke e-mailadressen een account hebben.
+  app.post('/api/password/forgot', (req, res) => {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const user = email && q('SELECT * FROM users WHERE email = ?').get(email);
+    if (user && !recentlySent(user.id, 'reset')) sendCode(req, user, 'reset');
+    res.status(204).end();
+  });
+
+  app.post('/api/password/reset', (req, res) => {
+    const password = str(req.body.password, 'Wachtwoord', { min: 8, max: 200 });
+    let user;
+    if (req.body.token) {
+      user = useCode('reset', { token: req.body.token });
+    } else {
+      const email = String(req.body.email || '').trim().toLowerCase();
+      const found = email && q('SELECT id FROM users WHERE email = ?').get(email);
+      user = useCode('reset', { userId: found?.id, code: req.body.code });
+    }
+    // Wie de code uit de mail heeft, heeft ook toegang tot het e-mailadres.
+    q(`UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, datetime('now'))
+       WHERE id = ?`).run(hashPassword(password), user.id);
+    // Overal uitloggen: misschien heeft iemand anders je wachtwoord.
+    q('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+    loginFailures.delete(user.email);
+    startSession(res, user.id);
+    res.json({ user: privateUser(q('SELECT * FROM users WHERE id = ?').get(user.id)) });
   });
 
   app.post('/api/logout', requireUser, (req, res) => {
@@ -282,6 +433,7 @@ function createApp({ db, ticketSecret, secureCookies = false, push = new Push(db
                             AND u.id NOT IN (SELECT target_id FROM swipes WHERE swiper_id = ?)
                             AND u.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id = ?)
                             AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id = ?)
+                            ${requireVerifiedEmail ? 'AND u.email_verified_at IS NOT NULL' : ''}
                           GROUP BY u.id`)
       .all(...eventIds, me.id, me.id, me.id, me.id)
       .filter((u) => fitsInterest(me.interested_in, u.gender) && fitsInterest(u.interested_in, me.gender))
@@ -296,6 +448,7 @@ function createApp({ db, ticketSecret, secureCookies = false, push = new Push(db
 
   app.post('/api/swipes', requireUser, (req, res) => {
     const me = req.user;
+    requireVerified(me);
     const targetId = Number(req.body.targetId);
     const liked = req.body.like === true;
     const target = Number.isInteger(targetId) && targetId !== me.id && q('SELECT * FROM users WHERE id = ?').get(targetId);
@@ -357,6 +510,7 @@ function createApp({ db, ticketSecret, secureCookies = false, push = new Push(db
   });
 
   app.post('/api/matches/:id/messages', requireUser, (req, res) => {
+    requireVerified(req.user);
     const match = getMatchFor(Number(req.params.id), req.user.id);
     const body = str(req.body.body, 'Bericht', { min: 1, max: 1000 });
     const { lastInsertRowid } = q('INSERT INTO messages (match_id, sender_id, body) VALUES (?, ?, ?)')

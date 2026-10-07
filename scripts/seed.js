@@ -55,8 +55,8 @@ for (const [name, gender, interest, birthdate, bio, events] of PEOPLE) {
   const email = `${name.toLowerCase()}@demo.sexyselectie.nl`;
   let user = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
   if (!user) {
-    const { lastInsertRowid } = db.prepare(`INSERT INTO users (email, password_hash, name, birthdate, gender, interested_in, bio, photo)
-                                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    const { lastInsertRowid } = db.prepare(`INSERT INTO users (email, password_hash, name, birthdate, gender, interested_in, bio, photo, email_verified_at)
+                                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
       .run(email, password, name, birthdate, gender, interest, bio, demoPhoto(name));
     user = { id: lastInsertRowid };
   } else {
