@@ -23,6 +23,27 @@ const REPORT_REASONS = {
   other: 'Iets anders',
 };
 
+// ---------- Iconen ----------
+// Dunne lijniconen (24x24), kleur volgt de tekstkleur.
+const ICONS = {
+  cards: '<rect x="7.5" y="3" width="12.5" height="16.5" rx="2.5"/><path d="M4.5 7v10.5a3 3 0 0 0 3 3H15"/>',
+  ticket: '<path d="M3.5 7.5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2V10a2 2 0 0 0 0 4v2.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V14a2 2 0 0 0 0-4Z"/><path d="M14.5 5.5v2.5M14.5 11v2M14.5 16v2.5"/>',
+  chat: '<path d="M20.5 11.5a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1.4-4.4A8.5 8.5 0 1 1 20.5 11.5Z"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 20.5a8 8 0 0 1 16 0"/>',
+  x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  heart: '<path d="M12 20s-7.5-4.6-7.5-10.4A4.1 4.1 0 0 1 12 7.2a4.1 4.1 0 0 1 7.5 2.4C19.5 15.4 12 20 12 20Z"/>',
+  flag: '<path d="M5.5 21V4M5.5 4h11l-2.2 4 2.2 4h-11"/>',
+  back: '<path d="M15 5l-7 7 7 7"/>',
+  more: '<circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/>',
+  scan: '<path d="M4 8.5V6a2 2 0 0 1 2-2h2.5M15.5 4H18a2 2 0 0 1 2 2v2.5M20 15.5V18a2 2 0 0 1-2 2h-2.5M8.5 20H6a2 2 0 0 1-2-2v-2.5M4 12h16"/>',
+  trash: '<path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l.9 12a2 2 0 0 0 2 1.9h5.2a2 2 0 0 0 2-1.9l.9-12M9.5 7V4.5h5V7"/>',
+  send: '<path d="M12 19V5.5M6 11.5l6-6 6 6"/>',
+  moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/>',
+  bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15L6 16.5ZM10 21h4"/>',
+  phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
+};
+const icon = (name) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
+
 // ---------- Helpers ----------
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -52,10 +73,52 @@ function toast(message, error = false) {
   toastTimer = setTimeout(() => (el.hidden = true), 3000);
 }
 
+function fallbackStyle(user) {
+  const light = 34 + ((user.id || 0) * 7) % 22;
+  const angle = ((user.id || 0) * 47) % 360;
+  return `background: radial-gradient(130% 100% at ${50 + Math.cos(angle) * 30}% 15%, hsl(0 0% ${light}%), #141414 72%)`;
+}
+
 function avatar(user, cls = 'avatar') {
   return user.photo
     ? `<div class="${cls}" style="background-image:url('${esc(user.photo)}')"></div>`
-    : `<div class="${cls}">${esc(user.name[0] || '?')}</div>`;
+    : `<div class="${cls}" style="${fallbackStyle(user)}">${esc(user.name[0] || '?')}</div>`;
+}
+
+// "14:32" voor vandaag, anders "ma" of "12 okt".
+function shortWhen(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return formatTime(iso);
+  if (now - d < 6 * 86400000) return d.toLocaleDateString('nl-NL', { weekday: 'short' });
+  return d.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' });
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 6 ? 'Goedenacht' : h < 12 ? 'Goedemorgen' : h < 18 ? 'Goedemiddag' : 'Goedenavond';
+}
+
+// "wo 7 okt · Zomerzon Festival over 8 dagen"
+function eventLine(tickets) {
+  const today = new Date().toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short' }).replace('.', '');
+  const next = tickets.find((t) => !t.past);
+  if (!next) return today;
+  const startOfDay = (t) => new Date(t).setHours(0, 0, 0, 0);
+  if (Date.parse(next.startsAt) <= Date.now()) return `${today} · nu: ${next.name}`;
+  const days = Math.round((startOfDay(next.startsAt) - startOfDay(Date.now())) / 86400000);
+  const when = days === 0 ? 'vandaag' : days === 1 ? 'morgen' : `over ${days} dagen`;
+  return `${today} · ${next.name} ${when}`;
+}
+
+function emptyState(iconName, title, text, action = '') {
+  return `
+    <div class="empty">
+      <div class="icon">${icon(iconName)}</div>
+      <h2>${title}</h2>
+      <p class="muted">${text}</p>
+      ${action}
+    </div>`;
 }
 
 function formatDay(iso) {
@@ -117,18 +180,18 @@ function onSubmit(form, handler) {
   });
 }
 
-// Verkleint een gekozen foto tot max 640px JPEG zodat hij klein genoeg is voor de API.
+// Verkleint een gekozen foto tot max 960px JPEG zodat hij klein genoeg is voor de API.
 function resizePhoto(file) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const scale = Math.min(1, 640 / Math.max(img.width, img.height));
+      const scale = Math.min(1, 960 / Math.max(img.width, img.height));
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(img.src);
-      resolve(canvas.toDataURL('image/jpeg', 0.8));
+      resolve(canvas.toDataURL('image/jpeg', 0.82));
     };
     img.onerror = () => reject(new Error('Kon de foto niet lezen'));
     img.src = URL.createObjectURL(file);
@@ -283,7 +346,7 @@ async function renderPushCard(container) {
   const [title, text, action] = PUSH_TEXT[status];
   container.innerHTML = `
     <div class="card">
-      <strong>🔔 ${title}</strong>
+      <strong style="display:flex;align-items:center;gap:8px">${icon('bell')} ${title}</strong>
       <p class="muted" style="margin:6px 0 0">${text}</p>
       ${action ? `<button class="${status === 'on' ? 'secondary' : ''} block" style="margin-top:12px" data-toggle>${action}</button>` : ''}
     </div>`;
@@ -294,7 +357,7 @@ async function renderPushCard(container) {
         await disablePush();
       } else {
         await enablePush();
-        toast('Meldingen staan aan 🔔');
+        toast('Meldingen staan aan');
       }
     } catch (err) {
       toast(err.message, true);
@@ -322,7 +385,7 @@ function connectStream() {
       state.unread.add(msg.matchId);
       updateBadge();
       if (location.hash === '#/matches') renderMatches();
-      toast('Nieuw bericht 💬');
+      toast('Nieuw bericht');
     }
   });
   es.addEventListener('unmatch', (e) => {
@@ -405,16 +468,18 @@ window.addEventListener('hashchange', router);
 
 function renderLogin() {
   view.innerHTML = `
-    <div class="hero">
-      <h1 class="brand">SexySelectie</h1>
-      <p class="muted">Scan je ticket. Swipe op wie er ook is. Match vóór de eerste act.</p>
-    </div>
-    <form class="card">
-      <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
-      <label>Wachtwoord<input name="password" type="password" autocomplete="current-password" required></label>
-      <button type="submit">Inloggen</button>
-    </form>
-    <p class="center" style="margin-top:16px">Nog geen account? <a href="#/registreer" class="brand">Maak er een</a></p>`;
+    <div class="auth">
+      <div class="hero">
+        <h1>Sexy<em>Selectie</em></h1>
+        <p>Scan je ticket. Zie wie er ook gaat. Match vóór de eerste act.</p>
+      </div>
+      <form>
+        <input name="email" type="email" autocomplete="email" placeholder="E-mailadres" aria-label="E-mailadres" required>
+        <input name="password" type="password" autocomplete="current-password" placeholder="Wachtwoord" aria-label="Wachtwoord" required>
+        <button type="submit" class="block">Inloggen</button>
+      </form>
+      <p class="switch">Nog geen account? <a href="#/registreer">Maak er een</a></p>
+    </div>`;
   onSubmit(view.querySelector('form'), async (data) => {
     state.me = (await api('/login', { method: 'POST', body: data })).user;
     location.hash = '#/ontdek';
@@ -423,11 +488,12 @@ function renderLogin() {
 
 function renderRegister() {
   view.innerHTML = `
-    <div class="hero" style="padding-bottom:12px">
-      <h1 class="brand">Account maken</h1>
-      <p class="muted">Je moet 18+ zijn.</p>
+    <div class="auth">
+    <div class="hero" style="padding:32px 0 24px">
+      <h1>Wie ben <em>jij?</em></h1>
+      <p>Een paar dingen over jou. Je foto voeg je straks toe in je profiel.</p>
     </div>
-    <form class="card">
+    <form>
       <label>Voornaam<input name="name" maxlength="40" autocomplete="given-name" required></label>
       <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
       <label>Wachtwoord (min. 8 tekens)<input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
@@ -443,13 +509,14 @@ function renderRegister() {
       <label>Over jou<textarea name="bio" maxlength="300" placeholder="Welke acts mag je niet missen?"></textarea></label>
       <label class="radio"><input type="checkbox" name="terms" required>
         <span>Ik ben 18+, ga akkoord met de <a href="/voorwaarden.html" target="_blank">voorwaarden</a> en geef toestemming om mijn voorkeur te gebruiken zoals in de <a href="/privacy.html" target="_blank">privacyverklaring</a> staat</span></label>
-      <button type="submit">Account maken</button>
+      <button type="submit" class="block">Account maken</button>
     </form>
-    <p class="center" style="margin-top:16px">Al een account? <a href="#/login" class="brand">Inloggen</a></p>`;
+    <p class="switch">Al een account? <a href="#/login">Inloggen</a></p>
+    </div>`;
   onSubmit(view.querySelector('form'), async (data) => {
     delete data.terms;
     state.me = (await api('/register', { method: 'POST', body: data })).user;
-    toast('Welkom! Scan nu je eerste ticket 🎟️');
+    toast('Welkom. Scan nu je eerste ticket.');
     location.hash = '#/tickets';
   });
 }
@@ -457,7 +524,6 @@ function renderRegister() {
 // ---------- Ontdek (swipen) ----------
 
 async function renderDiscover() {
-  view.innerHTML = '<p class="muted center">Laden…</p>';
   const [{ tickets }, discover] = await Promise.all([
     api('/tickets'),
     api(`/discover${state.eventFilter ? `?eventId=${encodeURIComponent(state.eventFilter)}` : ''}`),
@@ -465,81 +531,91 @@ async function renderDiscover() {
   const active = tickets.filter((t) => !t.past);
   if (state.eventFilter && !active.some((t) => t.eventId === state.eventFilter)) state.eventFilter = '';
 
+  const head = `
+    <header class="page-head">
+      <div>
+        <h1>${greeting()}, <em>${esc(state.me.name)}</em></h1>
+        <span class="eyebrow">${esc(eventLine(tickets))}</span>
+      </div>
+      <a class="btn icon-btn" href="#/tickets" aria-label="Tickets">${icon('ticket')}</a>
+    </header>`;
+
   if (!active.length) {
-    view.innerHTML = `
-      <div class="empty">
-        <div class="icon">🎟️</div>
-        <h2>Scan eerst je ticket</h2>
-        <p class="muted">Je ziet alleen mensen die naar hetzelfde festival of feest gaan als jij.</p>
-        <a class="btn" href="#/tickets">Ticket scannen</a>
-      </div>`;
+    view.innerHTML = head + emptyState('ticket', 'Scan eerst je ticket',
+      'Je ziet alleen mensen die naar hetzelfde festival of feest gaan als jij.',
+      `<a class="btn" href="#/tickets">${icon('scan')} Ticket scannen</a>`);
     return;
   }
 
   state.profiles = discover.profiles;
   view.innerHTML = `
-    <div class="chips">
-      <button class="chip ${state.eventFilter ? '' : 'active'}" data-event="">Alle evenementen</button>
-      ${active.map((t) => `<button class="chip ${state.eventFilter === t.eventId ? 'active' : ''}" data-event="${esc(t.eventId)}">${esc(t.name)}</button>`).join('')}
-    </div>
-    <div class="deck"></div>
-    <div class="actions">
-      <button class="nope" aria-label="Nee">✕</button>
-      <button class="like" aria-label="Ja">♥</button>
-    </div>`;
+    ${head}
+    ${active.length > 1 ? `
+      <div class="chips">
+        <button class="chip ${state.eventFilter ? '' : 'active'}" data-event="">Alles</button>
+        ${active.map((t) => `<button class="chip ${state.eventFilter === t.eventId ? 'active' : ''}" data-event="${esc(t.eventId)}">${esc(t.name)}</button>`).join('')}
+      </div>` : ''}
+    <div class="deck"></div>`;
 
   view.querySelectorAll('.chip').forEach((chip) =>
     chip.addEventListener('click', () => {
       state.eventFilter = chip.dataset.event;
       renderDiscover();
     }));
-  view.querySelector('.actions .nope').addEventListener('click', () => swipeTop(false));
-  view.querySelector('.actions .like').addEventListener('click', () => swipeTop(true));
   renderDeck();
+}
+
+function profileCard(p, isNext) {
+  return `
+    <div class="profile-card ${isNext ? 'next' : ''}" data-id="${p.id}">
+      ${p.photo
+        ? `<div class="photo" style="background-image:url('${esc(p.photo)}')"></div>`
+        : `<div class="avatar-fallback" style="${fallbackStyle(p)}">${esc(p.name[0])}</div>`}
+      <div class="shade"></div>
+      <div class="stamp like">Ja</div>
+      <div class="stamp nope">Nee</div>
+      <div class="top">
+        <div class="events">${p.sharedEvents.map((e) => `<span class="pill glass">${icon('ticket')}${esc(e.name)}</span>`).join('')}</div>
+        <button class="flag glass" data-report aria-label="${esc(p.name)} melden">${icon('flag')}</button>
+      </div>
+      <div class="bottom">
+        <div class="who">
+          <h2>${esc(p.name)}<small>${p.age}</small></h2>
+          ${p.bio ? `<p class="bio">${esc(p.bio)}</p>` : ''}
+        </div>
+        <div class="choices">
+          <button class="glass nope" data-choice="nope" aria-label="Nee">${icon('x')}</button>
+          <button class="glass like" data-choice="like" aria-label="Ja">${icon('heart')}</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 function renderDeck() {
   const deck = view.querySelector('.deck');
   if (!deck) return;
-  const actions = view.querySelector('.actions');
   if (!state.profiles.length) {
-    actions.hidden = true;
-    deck.innerHTML = `
-      <div class="empty">
-        <div class="icon">🌙</div>
-        <h2>Even niemand meer</h2>
-        <p class="muted">Je hebt iedereen gezien. Kom later terug — er scannen steeds meer mensen hun ticket.</p>
-        <button class="secondary" id="reload">Opnieuw laden</button>
-      </div>`;
+    deck.innerHTML = emptyState('moon', 'Even niemand meer',
+      'Je hebt iedereen gezien. Kom later terug, want er scannen steeds meer mensen hun ticket.',
+      '<button class="secondary" id="reload">Opnieuw laden</button>');
     deck.querySelector('#reload').addEventListener('click', renderDiscover);
     return;
   }
-  actions.hidden = false;
-  // Twee kaarten renderen zodat de volgende al klaarligt onder de bovenste.
-  deck.innerHTML = state.profiles.slice(0, 2).reverse().map((p) => `
-    <div class="profile-card" data-id="${p.id}">
-      ${p.photo ? `<div class="photo" style="background-image:url('${esc(p.photo)}')"></div>` : `<div class="avatar-fallback">${esc(p.name[0])}</div>`}
-      <div class="shade"></div>
-      <div class="stamp like">LIKE</div>
-      <div class="stamp nope">NOPE</div>
-      <button class="flag" data-report aria-label="Melden">⚑</button>
-      <div class="info">
-        <h2>${esc(p.name)} <small>${p.age}</small></h2>
-        <div class="events">${p.sharedEvents.map((e) => `<span>🎪 ${esc(e.name)}</span>`).join('')}</div>
-        ${p.bio ? `<p>${esc(p.bio)}</p>` : ''}
-      </div>
-    </div>`).join('');
-  const top = deck.lastElementChild;
-  const flag = top.querySelector('[data-report]');
-  flag.addEventListener('pointerdown', (e) => e.stopPropagation());
-  flag.addEventListener('click', () => {
-    const profile = state.profiles[0];
-    openReport(profile, () => {
-      state.profiles = state.profiles.filter((p) => p.id !== profile.id);
+  // De volgende kaart ligt er al onder, zodat de overgang vloeiend is.
+  const [top, next] = state.profiles;
+  deck.innerHTML = (next ? profileCard(next, true) : '') + profileCard(top, false);
+
+  const card = deck.lastElementChild;
+  for (const button of card.querySelectorAll('button')) button.addEventListener('pointerdown', (e) => e.stopPropagation());
+  card.querySelector('[data-choice=nope]').addEventListener('click', () => swipeTop(false));
+  card.querySelector('[data-choice=like]').addEventListener('click', () => swipeTop(true));
+  card.querySelector('[data-report]').addEventListener('click', () => {
+    openReport(top, () => {
+      state.profiles = state.profiles.filter((p) => p.id !== top.id);
       renderDeck();
     });
   });
-  enableDrag(top);
+  enableDrag(card);
 }
 
 function enableDrag(card) {
@@ -558,9 +634,9 @@ function enableDrag(card) {
     if (!dragging) return;
     dx = e.clientX - startX;
     dy = e.clientY - startY;
-    card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx / 15}deg)`;
-    like.style.opacity = Math.max(0, Math.min(1, dx / 100));
-    nope.style.opacity = Math.max(0, Math.min(1, -dx / 100));
+    card.style.transform = `translate(${dx}px, ${dy * 0.4}px) rotate(${dx / 18}deg)`;
+    like.style.opacity = Math.max(0, Math.min(1, dx / 90));
+    nope.style.opacity = Math.max(0, Math.min(1, -dx / 90));
   });
   const end = () => {
     if (!dragging) return;
@@ -586,11 +662,12 @@ async function swipeTop(like) {
   const card = view.querySelector(`.profile-card[data-id="${profile.id}"]`);
   if (card) {
     card.querySelector(`.stamp.${like ? 'like' : 'nope'}`).style.opacity = 1;
-    card.style.transform = `translate(${like ? 600 : -600}px, 40px) rotate(${like ? 30 : -30}deg)`;
+    card.style.transform = `translate(${like ? 600 : -600}px, 40px) rotate(${like ? 24 : -24}deg)`;
+    view.querySelector('.profile-card.next')?.classList.remove('next');
   }
   try {
     const { match } = await api('/swipes', { method: 'POST', body: { targetId: profile.id, like } });
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 300));
     state.profiles.shift();
     renderDeck();
     if (match) showMatch(match);
@@ -607,11 +684,11 @@ function showMatch(match) {
   const el = document.createElement('div');
   el.className = 'overlay';
   el.innerHTML = `
-    <h1 class="brand">It's a match!</h1>
     <div class="pair">${avatar(state.me)}${avatar(match.user)}</div>
+    <h1>It's a match</h1>
     <p>Jij en ${esc(match.user.name)} gaan allebei naar <strong>${esc(match.sharedEvents.map((e) => e.name).join(' & ') || 'hetzelfde evenement')}</strong>.</p>
     <button class="block" data-go>Stuur een bericht</button>
-    <button class="secondary block" data-close>Verder swipen</button>`;
+    <button class="secondary block" data-close>Verder kijken</button>`;
   el.querySelector('[data-go]').addEventListener('click', () => {
     el.remove();
     location.hash = `#/chat/${match.id}`;
@@ -625,9 +702,13 @@ function showMatch(match) {
 async function renderTickets() {
   const { tickets } = await api('/tickets');
   view.innerHTML = `
-    <h1>Mijn tickets</h1>
-    <p class="muted">Scan de QR-code of barcode van je ticket. Je ziet daarna alleen mensen die naar dezelfde evenementen gaan.</p>
-    <button class="block" id="scan">📷 Ticket scannen</button>
+    <header class="page-head">
+      <div>
+        <h1>Tickets</h1>
+        <span class="eyebrow">Je ticket bepaalt wie je ziet</span>
+      </div>
+    </header>
+    <button class="block" id="scan">${icon('scan')} Ticket scannen</button>
     <form id="manual" style="margin:12px 0 24px">
       <div class="row">
         <input name="code" placeholder="Of voer de ticketcode in" autocomplete="off" required>
@@ -642,12 +723,12 @@ async function renderTickets() {
             <div class="date">${day}<small>${esc(month)}</small></div>
             <div class="meta">
               <strong>${esc(t.name)}</strong>
-              <span class="muted">${esc(t.venue)}, ${esc(t.city)}</span><br>
-              <small class="muted">${t.past ? 'Afgelopen' : `${t.others} ${t.others === 1 ? 'ander' : 'anderen'} met een ticket`}</small>
+              <span>${esc(t.venue)}, ${esc(t.city)}</span><br>
+              <small>${t.past ? 'Afgelopen' : `${t.others} ${t.others === 1 ? 'ander' : 'anderen'} gaan ook`}</small>
             </div>
-            <button data-remove="${t.id}" aria-label="Verwijderen">🗑️</button>
+            <button data-remove="${t.id}" aria-label="Verwijderen">${icon('trash')}</button>
           </div>`;
-      }).join('') : '<p class="muted center">Nog geen tickets gescand.</p>'}
+      }).join('') : '<p class="muted center" style="margin-top:24px">Nog geen tickets. Scan je eerste ticket hierboven.</p>'}
     </div>`;
 
   view.querySelector('#scan').addEventListener('click', openScanner);
@@ -666,7 +747,7 @@ async function renderTickets() {
 
 async function addTicket(code) {
   const { event } = await api('/tickets', { method: 'POST', body: { code } });
-  toast(`🎉 Ticket voor ${event.name} toegevoegd!`);
+  toast(`Ticket voor ${event.name} toegevoegd`);
   if (location.hash === '#/tickets') renderTickets();
 }
 
@@ -779,40 +860,46 @@ async function renderMatches() {
   const { matches } = await api('/matches');
   const fresh = matches.filter((m) => !m.lastMessage);
   const conversations = matches.filter((m) => m.lastMessage);
+  const head = `
+    <header class="page-head">
+      <div>
+        <h1>Matches</h1>
+        ${matches.length ? `<span class="eyebrow">${matches.length} ${matches.length === 1 ? 'match' : 'matches'}</span>` : ''}
+      </div>
+    </header>`;
 
   if (!matches.length) {
-    view.innerHTML = `
-      <div class="empty">
-        <div class="icon">💘</div>
-        <h2>Nog geen matches</h2>
-        <p class="muted">Swipe naar rechts op mensen die je leuk vindt. Als het wederzijds is, kun je hier chatten.</p>
-        <a class="btn" href="#/ontdek">Begin met swipen</a>
-      </div>`;
+    view.innerHTML = head + emptyState('heart', 'Nog geen matches',
+      'Zie je iemand die je leuk vindt? Tik op het hartje. Is het wederzijds, dan kun je hier chatten.',
+      '<a class="btn" href="#/ontdek">Bekijk wie er gaan</a>');
     return;
   }
 
   view.innerHTML = `
-    <h1>Matches</h1>
+    ${head}
     <div id="push-banner"></div>
     ${fresh.length ? `
-      <h3 class="muted">Nieuwe matches</h3>
+      <h3>Nieuw</h3>
       <div class="new-matches">
-        ${fresh.map((m) => `<a href="#/chat/${m.id}">${avatar(m.user)}${esc(m.user.name)}</a>`).join('')}
+        ${fresh.map((m) => `<a href="#/chat/${m.id}"><span class="ring">${avatar(m.user)}</span><br>${esc(m.user.name)}</a>`).join('')}
       </div>` : ''}
-    ${conversations.length ? `<h3 class="muted">Berichten</h3>` : ''}
+    ${conversations.length ? '<h3>Berichten</h3>' : ''}
+    <div>
     ${conversations.map((m) => `
-      <a class="conversation" href="#/chat/${m.id}">
+      <a class="conversation ${state.unread.has(m.id) ? 'unread' : ''}" href="#/chat/${m.id}">
         ${avatar(m.user)}
         <div class="meta">
-          <strong>${esc(m.user.name)}</strong> ${state.unread.has(m.id) ? '<span class="brand">●</span>' : ''}
+          <strong>${esc(m.user.name)}</strong>${state.unread.has(m.id) ? '<span class="dot"></span>' : ''}
           <p>${m.lastMessage.senderId === state.me.id ? 'Jij: ' : ''}${esc(m.lastMessage.body)}</p>
         </div>
-      </a>`).join('')}`;
+        <small class="muted">${shortWhen(m.lastMessage.createdAt)}</small>
+      </a>`).join('')}
+    </div>`;
 
   // Alleen een herinnering tonen als meldingen nog uit staan.
   const banner = view.querySelector('#push-banner');
   if ((await pushStatus().catch(() => null)) === 'off') {
-    banner.style.marginBottom = '16px';
+    banner.style.marginBottom = '8px';
     renderPushCard(banner);
   }
 }
@@ -837,20 +924,24 @@ async function renderChat(matchId) {
   view.innerHTML = `
     <div class="chat">
       <header>
-        <a class="back" href="#/matches" aria-label="Terug">‹</a>
+        <a class="back" href="#/matches" aria-label="Terug">${icon('back')}</a>
         ${avatar(match.user)}
         <div class="meta">
           <strong>${esc(match.user.name)}, ${match.user.age}</strong>
-          <small>🎪 ${esc(match.sharedEvents.map((e) => e.name).join(', ') || 'Geen gedeelde evenementen meer')}</small>
+          <small>${esc(match.sharedEvents.map((e) => e.name).join(', ') || 'Geen gedeelde evenementen meer')}</small>
         </div>
-        <button class="link" data-menu aria-label="Opties">•••</button>
+        <button data-menu aria-label="Opties">${icon('more')}</button>
       </header>
       <div class="messages">
-        <p class="intro">Jullie matchten via ${esc(match.sharedEvents[0]?.name || 'SexySelectie')}. Spreek af bij een podium! 🎶</p>
+        <div class="intro">
+          ${avatar(match.user)}
+          <h2>Jij &amp; ${esc(match.user.name)}</h2>
+          <p class="muted">Jullie matchten via ${esc(match.sharedEvents[0]?.name || 'SexySelectie')}. Spreek af bij een podium dat jullie allebei kennen.</p>
+        </div>
       </div>
       <form>
         <input name="body" placeholder="Typ een bericht…" autocomplete="off" maxlength="1000" required>
-        <button type="submit">Stuur</button>
+        <button type="submit" aria-label="Versturen">${icon('send')}</button>
       </form>
     </div>`;
 
@@ -915,17 +1006,19 @@ function renderProfile() {
   const me = state.me;
   let photo = me.photo;
   view.innerHTML = `
-    <h1>Profiel</h1>
-    <form class="card">
-      <div class="photo-picker">
-        <div id="photo-preview">${avatar(me)}</div>
-        <div class="stack" style="gap:4px">
-          <label class="btn secondary" style="color:var(--text);background:var(--surface-2)">Foto kiezen
-            <input type="file" accept="image/*" hidden>
-          </label>
-          ${me.photo ? '<button type="button" class="link" data-remove-photo>Foto verwijderen</button>' : ''}
-        </div>
+    <div class="profile-head">
+      <div id="photo-preview">${avatar(me)}</div>
+      <h1>${esc(me.name)}</h1>
+      <span class="eyebrow">${me.age} · ${GENDER_LABEL[me.gender]}</span>
+      <div class="photo-actions">
+        <label class="btn secondary">${me.photo ? 'Andere foto' : 'Foto toevoegen'}
+          <input type="file" accept="image/*" hidden>
+        </label>
+        ${me.photo ? '<button type="button" class="secondary" data-remove-photo>Verwijderen</button>' : ''}
       </div>
+    </div>
+    ${me.photo ? '' : '<p class="muted center" style="margin-top:-8px">Je foto bepaalt hoe je kaart eruitziet. Kies er een die laat zien wie je bent.</p>'}
+    <form class="card" id="profile-form">
       <label>Voornaam<input name="name" value="${esc(me.name)}" maxlength="40" required></label>
       <div class="row">
         <label>Ik ben
@@ -936,8 +1029,8 @@ function renderProfile() {
         </label>
       </div>
       <label>Over jou<textarea name="bio" maxlength="300">${esc(me.bio)}</textarea></label>
-      <p class="muted" style="margin:0">${esc(me.email)} · ${me.age} jaar</p>
-      <button type="submit">Opslaan</button>
+      <p class="muted" style="margin:0;font-size:13px">${esc(me.email)}</p>
+      <button type="submit" class="block">Opslaan</button>
     </form>
     <div id="push-card" style="margin-top:16px"></div>
     ${installHelp()}
@@ -957,20 +1050,27 @@ function renderProfile() {
     try {
       photo = await resizePhoto(file);
       preview.innerHTML = avatar({ ...me, photo });
+      await save(formData(form));
     } catch (err) {
       toast(err.message, true);
     }
   });
-  view.querySelector('[data-remove-photo]')?.addEventListener('click', () => {
+  view.querySelector('[data-remove-photo]')?.addEventListener('click', async () => {
     photo = null;
-    preview.innerHTML = avatar({ ...me, photo: null });
+    try {
+      await save(formData(form));
+    } catch (err) {
+      toast(err.message, true);
+    }
   });
 
-  onSubmit(view.querySelector('form'), async (data) => {
+  const save = async (data) => {
     state.me = (await api('/me', { method: 'PUT', body: { ...data, photo } })).user;
     toast('Profiel opgeslagen');
     renderProfile();
-  });
+  };
+  const form = view.querySelector('#profile-form');
+  onSubmit(form, save);
 
   view.querySelector('#logout').addEventListener('click', async () => {
     await disablePush().catch(() => {});
@@ -1017,7 +1117,7 @@ function installHelp() {
     : 'Open het browsermenu (⋮) en kies <strong>App installeren</strong> of <strong>Toevoegen aan startscherm</strong>.';
   return `
     <div class="card install" style="margin-top:16px">
-      <strong>📲 Zet SexySelectie op je beginscherm</strong>
+      <strong style="display:flex;align-items:center;gap:8px">${icon('phone')} Zet SexySelectie op je beginscherm</strong>
       <p class="muted" style="margin:6px 0 0">${how}</p>
       ${isIos() ? '' : '<button class="block" id="install" style="margin-top:12px" hidden>Installeren</button>'}
     </div>`;

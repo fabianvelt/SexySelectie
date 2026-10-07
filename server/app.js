@@ -8,7 +8,7 @@ const { Push } = require('./push');
 const SESSION_COOKIE = 'ss_session';
 const GENDERS = ['man', 'woman', 'nonbinary'];
 const INTERESTS = ['men', 'women', 'everyone'];
-const MAX_PHOTO_BYTES = 400 * 1024;
+const MAX_PHOTO_BYTES = 600 * 1024;
 const REPORT_REASONS = ['fake', 'inappropriate', 'harassment', 'underage', 'other'];
 
 class HttpError extends Error {
@@ -318,7 +318,7 @@ function createApp({ db, ticketSecret, secureCookies = false, push = new Push(db
       match = { id: row.id, user: publicUser(target), sharedEvents: sharedEvents(me.id, target.id) };
       realtime.send(target.id, 'match', { id: row.id, user: publicUser(me), sharedEvents: match.sharedEvents });
       notify(target.id, {
-        title: "It's a match! 🎉",
+        title: "It's a match",
         body: `Jij en ${me.name} gaan allebei naar ${match.sharedEvents.map((e) => e.name).join(' & ')}`,
         url: `/#/chat/${row.id}`,
         tag: `match-${row.id}`,

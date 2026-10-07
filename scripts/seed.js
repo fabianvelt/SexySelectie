@@ -6,6 +6,7 @@
 // Alle demo-profielen hebben jou al geliket, dus een swipe naar rechts
 // levert direct een match op.
 
+const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { openDb } = require('../server/db');
@@ -34,6 +35,13 @@ const PEOPLE = [
   ['Alex', 'nonbinary', 'everyone', '1999-12-01', 'Op zoek naar dansmaatjes 🕺', ['zomerzon-2026', 'nachtlicht-rave', 'duinbeats-2026']],
 ];
 
+// Sfeerillustraties (silhouetten, geen echte mensen) zodat de demo laat zien
+// hoe profielfoto's de app inkleuren.
+function demoPhoto(name) {
+  const file = path.join(__dirname, 'demo-photos', `${name.toLowerCase()}.jpg`);
+  return fs.existsSync(file) ? `data:image/jpeg;base64,${fs.readFileSync(file).toString('base64')}` : null;
+}
+
 const db = openDb(DB_FILE);
 
 const upsertEvent = db.prepare(`INSERT INTO events (id, name, venue, city, starts_at, ends_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -47,10 +55,12 @@ for (const [name, gender, interest, birthdate, bio, events] of PEOPLE) {
   const email = `${name.toLowerCase()}@demo.sexyselectie.nl`;
   let user = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
   if (!user) {
-    const { lastInsertRowid } = db.prepare(`INSERT INTO users (email, password_hash, name, birthdate, gender, interested_in, bio)
-                                           VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(email, password, name, birthdate, gender, interest, bio);
+    const { lastInsertRowid } = db.prepare(`INSERT INTO users (email, password_hash, name, birthdate, gender, interested_in, bio, photo)
+                                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(email, password, name, birthdate, gender, interest, bio, demoPhoto(name));
     user = { id: lastInsertRowid };
+  } else {
+    db.prepare('UPDATE users SET photo = COALESCE(photo, ?) WHERE id = ?').run(demoPhoto(name), user.id);
   }
   demoIds.push(user.id);
   for (const eventId of events) {

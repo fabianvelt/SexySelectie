@@ -78,7 +78,7 @@ function createFcmSender(serviceAccount) {
             token: sub.token,
             notification: { title: message.title, body: message.body },
             data: { url: message.url, tag: message.tag },
-            android: { priority: 'high', notification: { tag: message.tag, color: '#89cff0', icon: 'ic_stat_notify' } },
+            android: { priority: 'high', notification: { tag: message.tag, color: '#0b0b0b', icon: 'ic_stat_notify' } },
           },
         }),
       });
