@@ -41,6 +41,8 @@ const ICONS = {
   moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/>',
   bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15L6 16.5ZM10 21h4"/>',
   phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
+  music: '<path d="M9 18V5.5l11-2V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
 };
 const icon = (name) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
 
@@ -109,6 +111,12 @@ function eventLine(tickets) {
   const days = Math.round((startOfDay(next.startsAt) - startOfDay(Date.now())) / 86400000);
   const when = days === 0 ? 'vandaag' : days === 1 ? 'morgen' : `over ${days} dagen`;
   return `${today} · ${next.name} ${when}`;
+}
+
+// "Nova Lux", "Nova Lux & Mira Sol" of "Nova Lux, Mira Sol +2"
+function actList(acts) {
+  if (acts.length <= 2) return acts.join(' & ');
+  return `${acts.slice(0, 2).join(', ')} +${acts.length - 2}`;
 }
 
 function emptyState(iconName, title, text, action = '') {
@@ -739,12 +747,14 @@ async function renderDiscover() {
 }
 
 function profileCard(p, isNext) {
+  const photos = p.photos?.length ? p.photos : [];
   return `
-    <div class="profile-card ${isNext ? 'next' : ''}" data-id="${p.id}">
-      ${p.photo
-        ? `<div class="photo" style="background-image:url('${esc(p.photo)}')"></div>`
+    <div class="profile-card ${isNext ? 'next' : ''}" data-id="${p.id}" data-photo="0">
+      ${photos.length
+        ? photos.map((url, i) => `<div class="photo ${i ? '' : 'active'}" style="background-image:url('${esc(url)}')"></div>`).join('')
         : `<div class="avatar-fallback" style="${fallbackStyle(p)}">${esc(p.name[0])}</div>`}
       <div class="shade"></div>
+      ${photos.length > 1 ? `<div class="bars">${photos.map((_, i) => `<span class="${i ? '' : 'active'}"></span>`).join('')}</div>` : ''}
       <div class="stamp like">Ja</div>
       <div class="stamp nope">Nee</div>
       <div class="top">
@@ -754,6 +764,7 @@ function profileCard(p, isNext) {
       <div class="bottom">
         <div class="who">
           <h2>${esc(p.name)}<small>${p.age}</small></h2>
+          ${p.sharedActs?.length ? `<p class="acts">${icon('music')}Allebei naar ${esc(actList(p.sharedActs))}</p>` : ''}
           ${p.bio ? `<p class="bio">${esc(p.bio)}</p>` : ''}
         </div>
         <div class="choices">
@@ -762,6 +773,20 @@ function profileCard(p, isNext) {
         </div>
       </div>
     </div>`;
+}
+
+// Tik links op de foto voor de vorige, rechts voor de volgende.
+function stepPhoto(card, clientX) {
+  const photos = card.querySelectorAll('.photo');
+  if (photos.length < 2) return;
+  const rect = card.getBoundingClientRect();
+  const current = Number(card.dataset.photo);
+  const next = clientX - rect.left < rect.width * 0.4
+    ? Math.max(0, current - 1)
+    : Math.min(photos.length - 1, current + 1);
+  card.dataset.photo = next;
+  photos.forEach((el, i) => el.classList.toggle('active', i === next));
+  card.querySelectorAll('.bars span').forEach((el, i) => el.classList.toggle('active', i === next));
 }
 
 function renderDeck() {
@@ -811,11 +836,15 @@ function enableDrag(card) {
     like.style.opacity = Math.max(0, Math.min(1, dx / 90));
     nope.style.opacity = Math.max(0, Math.min(1, -dx / 90));
   });
-  const end = () => {
+  const end = (e) => {
     if (!dragging) return;
     dragging = false;
     card.classList.remove('dragging');
-    if (Math.abs(dx) > 110) {
+    // Nauwelijks bewogen: dat is een tik, geen swipe.
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) {
+      card.style.transform = '';
+      stepPhoto(card, e.clientX);
+    } else if (Math.abs(dx) > 110) {
       swipeTop(dx > 0);
     } else {
       card.style.transform = '';
@@ -859,7 +888,9 @@ function showMatch(match) {
   el.innerHTML = `
     <div class="pair">${avatar(state.me)}${avatar(match.user)}</div>
     <h1>It's a match</h1>
-    <p>Jij en ${esc(match.user.name)} gaan allebei naar <strong>${esc(match.sharedEvents.map((e) => e.name).join(' & ') || 'hetzelfde evenement')}</strong>.</p>
+    <p>${match.sharedActs?.length
+      ? `Jullie willen allebei naar <strong>${esc(actList(match.sharedActs))}</strong>.`
+      : `Jij en ${esc(match.user.name)} gaan allebei naar <strong>${esc(match.sharedEvents.map((e) => e.name).join(' & ') || 'hetzelfde evenement')}</strong>.`}</p>
     <button class="block" data-go>Stuur een bericht</button>
     <button class="secondary block" data-close>Verder kijken</button>`;
   el.querySelector('[data-go]').addEventListener('click', () => {
@@ -898,6 +929,8 @@ async function renderTickets() {
               <strong>${esc(t.name)}</strong>
               <span>${esc(t.venue)}, ${esc(t.city)}</span><br>
               <small>${t.past ? 'Afgelopen' : `${t.others} ${t.others === 1 ? 'ander' : 'anderen'} gaan ook`}</small>
+              ${t.lineupSize && !t.past ? `<button class="lineup-btn" data-lineup="${esc(t.eventId)}" data-name="${esc(t.name)}">
+                ${icon('music')}${t.myActs ? `${t.myActs} ${t.myActs === 1 ? 'act' : 'acts'} gekozen` : 'Kies je line-up'}</button>` : ''}
             </div>
             <button data-remove="${t.id}" aria-label="Verwijderen">${icon('trash')}</button>
           </div>`;
@@ -905,6 +938,8 @@ async function renderTickets() {
     </div>`;
 
   view.querySelector('#scan').addEventListener('click', openScanner);
+  view.querySelectorAll('[data-lineup]').forEach((b) =>
+    b.addEventListener('click', () => openLineup(b.dataset.lineup, b.dataset.name)));
   onSubmit(view.querySelector('#manual'), ({ code }) => addTicket(code));
   view.querySelectorAll('[data-remove]').forEach((b) =>
     b.addEventListener('click', async () => {
@@ -921,7 +956,44 @@ async function renderTickets() {
 async function addTicket(code) {
   const { event } = await api('/tickets', { method: 'POST', body: { code } });
   toast(`Ticket voor ${event.name} toegevoegd`);
-  if (location.hash === '#/tickets') renderTickets();
+  if (location.hash === '#/tickets') await renderTickets();
+  // Heeft het evenement een line-up, vraag dan meteen wie je wilt zien.
+  if (event.lineupSize) openLineup(event.id, event.name);
+}
+
+async function openLineup(eventId, eventName) {
+  let acts;
+  try {
+    ({ acts } = await api(`/events/${encodeURIComponent(eventId)}/lineup`));
+  } catch (err) {
+    toast(err.message, true);
+    return;
+  }
+  const el = sheet(`
+    <span class="eyebrow">${esc(eventName)}</span>
+    <h2>Wie wil je <em>zien?</em></h2>
+    <p class="muted">Mensen die dezelfde acts kiezen zie je eerder, en het staat op je kaart.</p>
+    <div class="act-chips">
+      ${acts.map((a) => `<button type="button" class="chip ${a.selected ? 'active' : ''}" data-act="${a.id}" aria-pressed="${a.selected}">${esc(a.name)}</button>`).join('')}
+    </div>
+    <button class="block" data-save>Opslaan</button>
+    <button class="link block" data-close>Later</button>`);
+  el.querySelectorAll('[data-act]').forEach((chip) =>
+    chip.addEventListener('click', () => {
+      chip.classList.toggle('active');
+      chip.setAttribute('aria-pressed', chip.classList.contains('active'));
+    }));
+  el.querySelector('[data-save]').addEventListener('click', async () => {
+    const actIds = [...el.querySelectorAll('[data-act].active')].map((c) => Number(c.dataset.act));
+    try {
+      await api(`/events/${encodeURIComponent(eventId)}/lineup`, { method: 'PUT', body: { actIds } });
+      el.remove();
+      toast(actIds.length ? 'Je line-up is opgeslagen' : 'Line-up leeggemaakt');
+      if (location.hash === '#/tickets') renderTickets();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
 }
 
 let jsQRPromise;
@@ -1109,7 +1181,9 @@ async function renderChat(matchId) {
         <div class="intro">
           ${avatar(match.user)}
           <h2>Jij &amp; ${esc(match.user.name)}</h2>
-          <p class="muted">Jullie matchten via ${esc(match.sharedEvents[0]?.name || 'SexySelectie')}. Spreek af bij een podium dat jullie allebei kennen.</p>
+          <p class="muted">${match.sharedActs?.length
+            ? `Jullie willen allebei naar ${esc(actList(match.sharedActs))}. Vraag of jullie daar samen heen gaan.`
+            : `Jullie matchten via ${esc(match.sharedEvents[0]?.name || 'SexySelectie')}. Spreek af bij een podium dat jullie allebei kennen.`}</p>
         </div>
       </div>
       <form>
@@ -1175,22 +1249,28 @@ function appendMessage(msg) {
 
 // ---------- Profiel ----------
 
+const MAX_PHOTOS = 6;
+
 function renderProfile() {
   const me = state.me;
-  let photo = me.photo;
+  const photos = me.photos || [];
   view.innerHTML = `
     <div class="profile-head">
-      <div id="photo-preview">${avatar(me)}</div>
+      ${avatar(me)}
       <h1>${esc(me.name)}</h1>
       <span class="eyebrow">${me.age} · ${GENDER_LABEL[me.gender]}</span>
-      <div class="photo-actions">
-        <label class="btn secondary">${me.photo ? 'Andere foto' : 'Foto toevoegen'}
-          <input type="file" accept="image/*" hidden>
-        </label>
-        ${me.photo ? '<button type="button" class="secondary" data-remove-photo>Verwijderen</button>' : ''}
-      </div>
     </div>
-    ${me.photo ? '' : '<p class="muted center" style="margin-top:-8px">Je foto bepaalt hoe je kaart eruitziet. Kies er een die laat zien wie je bent.</p>'}
+    <h3 class="photos-title">Foto's <span>${photos.length}/${MAX_PHOTOS}</span></h3>
+    <div class="photo-grid">
+      ${Array.from({ length: MAX_PHOTOS }, (_, i) => photos[i]
+        ? `<button type="button" class="slot" data-slot="${i}" style="background-image:url('${esc(photos[i])}')" aria-label="Foto ${i + 1}">
+            ${i === 0 ? '<span class="tag">Hoofdfoto</span>' : ''}</button>`
+        : `<label class="slot empty" for="photo-input" aria-label="Foto toevoegen">${icon('plus')}</label>`).join('')}
+    </div>
+    <input type="file" id="photo-input" accept="image/*" multiple hidden>
+    <p class="muted photo-hint">${photos.length
+      ? 'Tik op een foto om hem je hoofdfoto te maken of te verwijderen.'
+      : 'Je foto\'s bepalen hoe je kaart eruitziet. Kies er een paar die laten zien wie je bent.'}</p>
     <form class="card" id="profile-form">
       <label>Voornaam<input name="name" value="${esc(me.name)}" maxlength="40" required></label>
       <div class="row">
@@ -1216,29 +1296,10 @@ function renderProfile() {
       </p>
     </div>`;
 
-  const preview = view.querySelector('#photo-preview');
-  view.querySelector('input[type=file]').addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    try {
-      photo = await resizePhoto(file);
-      preview.innerHTML = avatar({ ...me, photo });
-      await save(formData(form));
-    } catch (err) {
-      toast(err.message, true);
-    }
-  });
-  view.querySelector('[data-remove-photo]')?.addEventListener('click', async () => {
-    photo = null;
-    try {
-      await save(formData(form));
-    } catch (err) {
-      toast(err.message, true);
-    }
-  });
+  bindPhotoGrid(photos);
 
   const save = async (data) => {
-    state.me = (await api('/me', { method: 'PUT', body: { ...data, photo } })).user;
+    state.me = (await api('/me', { method: 'PUT', body: data })).user;
     toast('Profiel opgeslagen');
     renderProfile();
   };
@@ -1270,6 +1331,53 @@ function renderProfile() {
       toast('Je account is verwijderd');
     });
   });
+}
+
+function bindPhotoGrid(photos) {
+  view.querySelector('#photo-input').addEventListener('change', async (e) => {
+    const files = [...e.target.files].slice(0, MAX_PHOTOS - photos.length);
+    if (!files.length) return;
+    const empty = [...view.querySelectorAll('.slot.empty')];
+    empty.slice(0, files.length).forEach((slot) => slot.classList.add('loading'));
+    try {
+      for (const file of files) {
+        state.me = (await api('/me/photos', { method: 'POST', body: { photo: await resizePhoto(file) } })).user;
+      }
+      toast(files.length === 1 ? 'Foto toegevoegd' : `${files.length} foto's toegevoegd`);
+    } catch (err) {
+      toast(err.message, true);
+    }
+    renderProfile();
+  });
+
+  view.querySelectorAll('[data-slot]').forEach((slot) =>
+    slot.addEventListener('click', () => {
+      const i = Number(slot.dataset.slot);
+      const menu = sheet(`
+        <div class="sheet-photo" style="background-image:url('${esc(photos[i])}')"></div>
+        ${i > 0 ? '<button class="block" data-main>Maak hoofdfoto</button>' : ''}
+        <button class="secondary block danger" data-delete>Verwijderen</button>
+        <button class="link block" data-close>Annuleren</button>`);
+      menu.querySelector('[data-main]')?.addEventListener('click', async () => {
+        const order = [photos[i], ...photos.filter((_, j) => j !== i)];
+        try {
+          state.me = (await api('/me/photos', { method: 'PUT', body: { order } })).user;
+          menu.remove();
+          renderProfile();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+      menu.querySelector('[data-delete]').addEventListener('click', async () => {
+        try {
+          state.me = (await api(`/me/photos/${photos[i].split('/').pop()}`, { method: 'DELETE' })).user;
+          menu.remove();
+          renderProfile();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+    }));
 }
 
 // ---------- Installeren op je telefoon (PWA) ----------

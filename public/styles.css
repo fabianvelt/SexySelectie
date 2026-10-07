@@ -189,9 +189,14 @@ label.radio span { font-size: 13px; color: var(--muted); }
 /* De volgende kaart piept er bovenuit, zodat je ziet dat er meer komt. */
 .profile-card.next { transform-origin: 50% 0; transform: translateY(-14px) scale(.92); opacity: .55; pointer-events: none; box-shadow: none; }
 .profile-card.dragging { transition: none; cursor: grabbing; }
-.profile-card .photo { position: absolute; inset: 0; background-size: cover; background-position: center; }
+.profile-card .photo { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0; }
+.profile-card .photo.active { opacity: 1; }
+/* Streepjes bovenaan: hoeveel foto's er zijn en welke je ziet. */
+.profile-card .bars { position: absolute; top: 10px; left: 14px; right: 14px; display: flex; gap: 4px; z-index: 1; }
+.profile-card .bars span { flex: 1; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .35); }
+.profile-card .bars span.active { background: #fff; }
 .profile-card .shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.25) 0%, transparent 22%, transparent 48%, rgba(0,0,0,.78) 100%); }
-.profile-card .top { position: absolute; top: 16px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.profile-card .top { position: absolute; top: 24px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .glass {
   background: var(--glass); border: 1px solid var(--glass-line); color: #fff;
   backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%);
@@ -205,6 +210,8 @@ label.radio span { font-size: 13px; color: var(--muted); }
 .profile-card .who { flex: 1; min-width: 0; }
 .profile-card h2 { font-size: 40px; margin: 0 0 4px; line-height: 1; }
 .profile-card h2 small { font-family: var(--sans); font-size: 18px; font-weight: 300; margin-left: 4px; opacity: .9; }
+.profile-card .acts { display: flex; align-items: center; gap: 6px; margin: 2px 0 6px; font-size: 13px; font-weight: 600; }
+.profile-card .acts svg.i { width: 15px; height: 15px; }
 .profile-card .bio { margin: 0; font-size: 14px; opacity: .88; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .profile-card .choices { display: flex; gap: 10px; flex: none; }
 .profile-card .choices button { width: 54px; height: 54px; padding: 0; border-radius: 50%; }
@@ -243,7 +250,7 @@ label.radio span { font-size: 13px; color: var(--muted); }
 .ticket .meta strong { display: block; font-size: 16px; margin-bottom: 2px; }
 .ticket .meta span, .ticket .meta small { color: var(--muted); font-size: 14px; }
 .ticket.past { opacity: .45; }
-.ticket button { align-self: center; margin-right: 8px; background: none; color: var(--muted); padding: 10px; }
+.ticket > button { align-self: center; margin-right: 8px; background: none; color: var(--muted); padding: 10px; }
 
 .scanner { position: fixed; inset: 0; background: #000; z-index: 20; display: flex; flex-direction: column; }
 .scanner video { flex: 1; width: 100%; object-fit: cover; }
@@ -339,3 +346,29 @@ label.radio span { font-size: 13px; color: var(--muted); }
   max-width: calc(100% - 40px); font-size: 14px; font-weight: 500; box-shadow: var(--shadow); text-align: center;
 }
 #toast.error { background: var(--danger); color: #fff; }
+
+/* ---------- Foto's in je profiel ---------- */
+.photos-title { display: flex; justify-content: space-between; margin-top: 4px; }
+.photos-title span { font-weight: 500; letter-spacing: 0; }
+.photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.slot {
+  width: 100%; aspect-ratio: 3 / 4; border-radius: 14px; background: var(--surface) center / cover; padding: 0; position: relative;
+  display: grid; place-items: center; color: var(--muted); border: 0; cursor: pointer;
+}
+.slot.empty { border: 1.5px dashed color-mix(in srgb, var(--muted) 45%, transparent); background: transparent; }
+.slot.loading { animation: pulse 1s ease-in-out infinite alternate; background: var(--surface); }
+.slot .tag {
+  position: absolute; left: 6px; bottom: 6px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 11px; font-weight: 600;
+  padding: 3px 8px; border-radius: 999px; backdrop-filter: blur(6px);
+}
+.photo-hint { font-size: 13px; margin: 10px 0 20px; }
+.sheet-photo { width: 120px; aspect-ratio: 3 / 4; border-radius: 14px; background: center / cover; align-self: center; margin-bottom: 8px; }
+@keyframes pulse { to { opacity: .45; } }
+
+/* ---------- Line-up ---------- */
+.lineup-btn {
+  margin-top: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; background: var(--bg); color: var(--text); gap: 6px;
+}
+.lineup-btn svg.i { width: 14px; height: 14px; }
+.act-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 10px; }
+.act-chips .chip { padding: 10px 14px; font-size: 14px; }

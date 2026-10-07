@@ -5,11 +5,14 @@ const { verifyTicketCode, hashTicketCode } = require('./tickets');
 const { Realtime } = require('./realtime');
 const { Push } = require('./push');
 const { createMailer, verifyEmail, resetEmail } = require('./mail');
+const { insertPhoto } = require('./db');
 
 const SESSION_COOKIE = 'ss_session';
 const GENDERS = ['man', 'woman', 'nonbinary'];
 const INTERESTS = ['men', 'women', 'everyone'];
 const MAX_PHOTO_BYTES = 600 * 1024;
+const MAX_PHOTOS = 6;
+const MAX_ACTS_PER_EVENT = 30;
 const REPORT_REASONS = ['fake', 'inappropriate', 'harassment', 'underage', 'other'];
 const CODE_TTL = { verify: 24 * 60 * 60 * 1000, reset: 30 * 60 * 1000 };
 const CODE_MAX_ATTEMPTS = 5;
@@ -38,13 +41,13 @@ function fitsInterest(interest, gender) {
   return (interest === 'men' && gender === 'man') || (interest === 'women' && gender === 'woman');
 }
 
-function publicUser(u) {
-  return { id: u.id, name: u.name, age: ageFrom(u.birthdate), gender: u.gender, bio: u.bio, photo: u.photo };
+function publicUser(u, photos = []) {
+  return { id: u.id, name: u.name, age: ageFrom(u.birthdate), gender: u.gender, bio: u.bio, photo: photos[0] ?? null, photos };
 }
 
-function privateUser(u) {
+function privateUser(u, photos = []) {
   return {
-    ...publicUser(u),
+    ...publicUser(u, photos),
     email: u.email,
     emailVerified: !!u.email_verified_at,
     birthdate: u.birthdate,
@@ -80,16 +83,23 @@ function validateProfile(body, { partial = false } = {}) {
     if (!INTERESTS.includes(body.interestedIn)) throw new HttpError(400, 'Ongeldige voorkeur');
     out.interested_in = body.interestedIn;
   }
-  if (body.photo !== undefined && body.photo !== null) {
-    if (typeof body.photo !== 'string' || !/^data:image\/(jpeg|png|webp);base64,/.test(body.photo)) {
-      throw new HttpError(400, 'Foto moet een JPEG, PNG of WebP zijn');
-    }
-    if (body.photo.length > MAX_PHOTO_BYTES * 1.37) throw new HttpError(400, 'Foto is te groot');
-    out.photo = body.photo;
-  } else if (body.photo === null) {
-    out.photo = null;
-  }
   return out;
+}
+
+// Controleert een geüploade foto (data-URL) op type, grootte en inhoud. Dat
+// laatste voorkomt dat iemand iets anders dan een afbeelding als "foto" opslaat.
+function validatePhoto(dataUrl) {
+  const [, mime, base64] = (typeof dataUrl === 'string' && dataUrl.match(/^data:(image\/(?:jpeg|png|webp));base64,(.*)$/s)) || [];
+  if (!mime) throw new HttpError(400, 'Foto moet een JPEG, PNG of WebP zijn');
+  const bytes = Buffer.from(base64, 'base64');
+  if (bytes.length > MAX_PHOTO_BYTES) throw new HttpError(400, 'Foto is te groot');
+  const magic = {
+    'image/jpeg': bytes[0] === 0xff && bytes[1] === 0xd8,
+    'image/png': bytes.subarray(0, 4).toString('hex') === '89504e47',
+    'image/webp': bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP',
+  };
+  if (!magic[mime]) throw new HttpError(400, 'Dit bestand is geen geldige foto');
+  return dataUrl;
 }
 
 function createApp({
@@ -242,6 +252,21 @@ function createApp({
       .all(otherId, userId, new Date().toISOString());
   }
 
+  const photoUrls = (userId) =>
+    q('SELECT id FROM photos WHERE user_id = ? ORDER BY position').all(userId).map((p) => `/api/photos/${p.id}`);
+  const pub = (u) => publicUser(u, photoUrls(u.id));
+  const priv = (u) => privateUser(u, photoUrls(u.id));
+  const freshMe = (id) => priv(q('SELECT * FROM users WHERE id = ?').get(id));
+
+  // Acts die allebei willen zien, bij evenementen waar ze allebei heen gaan.
+  function sharedActs(userId, otherId) {
+    return q(`SELECT a.name FROM user_acts x JOIN user_acts y ON y.act_id = x.act_id AND y.user_id = ?
+              JOIN acts a ON a.id = x.act_id JOIN events e ON e.id = a.event_id
+              WHERE x.user_id = ? AND e.ends_at > ? ORDER BY a.name`)
+      .all(otherId, userId, new Date().toISOString())
+      .map((r) => r.name);
+  }
+
   function isBlocked(a, b) {
     return !!q('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)')
       .get(a, b, b, a);
@@ -283,14 +308,13 @@ function createApp({
     if (q('SELECT 1 FROM users WHERE email = ?').get(email)) {
       throw new HttpError(409, 'Er bestaat al een account met dit e-mailadres');
     }
-    const { lastInsertRowid } = q(`INSERT INTO users (email, password_hash, name, birthdate, gender, interested_in, bio, photo)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(email, hashPassword(password), profile.name, birthdate, profile.gender, profile.interested_in,
-        profile.bio, profile.photo ?? null);
+    const { lastInsertRowid } = q(`INSERT INTO users (email, password_hash, name, birthdate, gender, interested_in, bio)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(email, hashPassword(password), profile.name, birthdate, profile.gender, profile.interested_in, profile.bio);
     const user = q('SELECT * FROM users WHERE id = ?').get(lastInsertRowid);
     startSession(res, user.id);
     sendCode(req, user, 'verify');
-    res.status(201).json({ user: privateUser(user) });
+    res.status(201).json({ user: priv(user) });
   });
 
   app.post('/api/login', (req, res) => {
@@ -304,7 +328,7 @@ function createApp({
     }
     loginFailures.delete(email);
     startSession(res, user.id);
-    res.json({ user: privateUser(user) });
+    res.json({ user: priv(user) });
   });
 
   // ---------- E-mail bevestigen ----------
@@ -317,7 +341,7 @@ function createApp({
     const user = useCode('verify', { userId: me?.id, code: req.body.code, token: req.body.token });
     q("UPDATE users SET email_verified_at = COALESCE(email_verified_at, datetime('now')) WHERE id = ?").run(user.id);
     const fresh = q('SELECT * FROM users WHERE id = ?').get(user.id);
-    res.json({ user: me?.id === fresh.id ? privateUser(fresh) : null });
+    res.json({ user: me?.id === fresh.id ? priv(fresh) : null });
   });
 
   app.post('/api/email/resend', requireUser, (req, res) => {
@@ -354,7 +378,7 @@ function createApp({
     q('DELETE FROM sessions WHERE user_id = ?').run(user.id);
     loginFailures.delete(user.email);
     startSession(res, user.id);
-    res.json({ user: privateUser(q('SELECT * FROM users WHERE id = ?').get(user.id)) });
+    res.json({ user: priv(q('SELECT * FROM users WHERE id = ?').get(user.id)) });
   });
 
   app.post('/api/logout', requireUser, (req, res) => {
@@ -364,7 +388,7 @@ function createApp({
   });
 
   app.get('/api/me', requireUser, (req, res) => {
-    res.json({ user: privateUser(req.user) });
+    res.json({ user: priv(req.user) });
   });
 
   app.put('/api/me', requireUser, (req, res) => {
@@ -374,7 +398,72 @@ function createApp({
       q(`UPDATE users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
         .run(...keys.map((k) => changes[k]), req.user.id);
     }
-    res.json({ user: privateUser(q('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
+    res.json({ user: priv(q('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
+  });
+
+  // ---------- Foto's ----------
+
+  // Alleen voor ingelogde gebruikers. Een foto verandert nooit (een nieuwe foto
+  // krijgt een nieuw id), dus de telefoon mag hem voor altijd bewaren.
+  app.get('/api/photos/:id', requireUser, (req, res) => {
+    const photo = q('SELECT mime, data FROM photos WHERE id = ?').get(String(req.params.id));
+    if (!photo) throw new HttpError(404, 'Foto niet gevonden');
+    res.set('Cache-Control', 'private, max-age=31536000, immutable');
+    res.type(photo.mime).send(Buffer.from(photo.data));
+  });
+
+  app.post('/api/me/photos', requireUser, (req, res) => {
+    const dataUrl = validatePhoto(req.body.photo);
+    const { n } = q('SELECT COUNT(*) AS n FROM photos WHERE user_id = ?').get(req.user.id);
+    if (n >= MAX_PHOTOS) throw new HttpError(400, `Je kunt maximaal ${MAX_PHOTOS} foto's toevoegen`);
+    insertPhoto(db, req.user.id, dataUrl, n);
+    res.status(201).json({ user: freshMe(req.user.id) });
+  });
+
+  // Nieuwe volgorde: een lijst met al je foto-id's, de eerste wordt je hoofdfoto.
+  app.put('/api/me/photos', requireUser, (req, res) => {
+    const ids = Array.isArray(req.body.order) ? req.body.order.map((u) => String(u).split('/').pop()) : [];
+    const own = q('SELECT id FROM photos WHERE user_id = ?').all(req.user.id).map((p) => p.id);
+    if (ids.length !== own.length || new Set(ids).size !== ids.length || !ids.every((id) => own.includes(id))) {
+      throw new HttpError(400, 'Ongeldige volgorde');
+    }
+    ids.forEach((id, i) => q('UPDATE photos SET position = ? WHERE id = ?').run(i, id));
+    res.json({ user: freshMe(req.user.id) });
+  });
+
+  app.delete('/api/me/photos/:id', requireUser, (req, res) => {
+    const { changes } = q('DELETE FROM photos WHERE id = ? AND user_id = ?').run(String(req.params.id), req.user.id);
+    if (!changes) throw new HttpError(404, 'Foto niet gevonden');
+    q('SELECT id FROM photos WHERE user_id = ? ORDER BY position').all(req.user.id)
+      .forEach((p, i) => q('UPDATE photos SET position = ? WHERE id = ?').run(i, p.id));
+    res.json({ user: freshMe(req.user.id) });
+  });
+
+  // ---------- Line-up ----------
+
+  app.get('/api/events/:id/lineup', requireUser, (req, res) => {
+    const event = q('SELECT id, name FROM events WHERE id = ?').get(String(req.params.id));
+    if (!event) throw new HttpError(404, 'Evenement niet gevonden');
+    const acts = q(`SELECT a.id, a.name, (ua.user_id IS NOT NULL) AS selected FROM acts a
+                    LEFT JOIN user_acts ua ON ua.act_id = a.id AND ua.user_id = ?
+                    WHERE a.event_id = ? ORDER BY a.name COLLATE NOCASE`)
+      .all(req.user.id, event.id)
+      .map((a) => ({ id: a.id, name: a.name, selected: !!a.selected }));
+    res.json({ event, acts });
+  });
+
+  app.put('/api/events/:id/lineup', requireUser, (req, res) => {
+    const eventId = String(req.params.id);
+    if (!q('SELECT 1 FROM tickets WHERE user_id = ? AND event_id = ?').get(req.user.id, eventId)) {
+      throw new HttpError(403, 'Scan eerst je ticket voor dit evenement');
+    }
+    const wanted = Array.isArray(req.body.actIds) ? [...new Set(req.body.actIds.map(Number))] : null;
+    if (!wanted || wanted.length > MAX_ACTS_PER_EVENT) throw new HttpError(400, 'Ongeldige selectie');
+    const valid = new Set(q('SELECT id FROM acts WHERE event_id = ?').all(eventId).map((a) => a.id));
+    if (!wanted.every((id) => valid.has(id))) throw new HttpError(400, 'Deze act staat niet in de line-up');
+    q('DELETE FROM user_acts WHERE user_id = ? AND act_id IN (SELECT id FROM acts WHERE event_id = ?)').run(req.user.id, eventId);
+    for (const id of wanted) q('INSERT INTO user_acts (user_id, act_id) VALUES (?, ?)').run(req.user.id, id);
+    res.json({ selected: wanted.length });
   });
 
   // ---------- Tickets ----------
@@ -383,7 +472,10 @@ function createApp({
     const now = new Date().toISOString();
     const tickets = q(`SELECT t.id, t.scanned_at AS scannedAt, e.id AS eventId, e.name, e.venue, e.city,
                               e.starts_at AS startsAt, e.ends_at AS endsAt,
-                              (SELECT COUNT(DISTINCT o.user_id) FROM tickets o WHERE o.event_id = e.id AND o.user_id != t.user_id) AS others
+                              (SELECT COUNT(DISTINCT o.user_id) FROM tickets o WHERE o.event_id = e.id AND o.user_id != t.user_id) AS others,
+                              (SELECT COUNT(*) FROM acts a WHERE a.event_id = e.id) AS lineupSize,
+                              (SELECT COUNT(*) FROM user_acts ua JOIN acts a ON a.id = ua.act_id
+                                WHERE a.event_id = e.id AND ua.user_id = t.user_id) AS myActs
                        FROM tickets t JOIN events e ON e.id = t.event_id
                        WHERE t.user_id = ? ORDER BY e.starts_at`)
       .all(req.user.id)
@@ -407,8 +499,9 @@ function createApp({
     if (!existing) {
       q('INSERT INTO tickets (code_hash, event_id, user_id) VALUES (?, ?, ?)').run(codeHash, event.id, req.user.id);
     }
+    const { n: lineupSize } = q('SELECT COUNT(*) AS n FROM acts WHERE event_id = ?').get(event.id);
     res.status(existing ? 200 : 201).json({
-      event: { id: event.id, name: event.name, venue: event.venue, city: event.city, startsAt: event.starts_at },
+      event: { id: event.id, name: event.name, venue: event.venue, city: event.city, startsAt: event.starts_at, lineupSize },
     });
   });
 
@@ -437,12 +530,13 @@ function createApp({
                           GROUP BY u.id`)
       .all(...eventIds, me.id, me.id, me.id, me.id)
       .filter((u) => fitsInterest(me.interested_in, u.gender) && fitsInterest(u.interested_in, me.gender))
-      .sort((a, b) => b.shared - a.shared || Math.random() - 0.5)
+      .map((u) => ({ u, acts: sharedActs(me.id, u.id), random: Math.random() }))
+      .sort((a, b) => b.u.shared - a.u.shared || b.acts.length - a.acts.length || a.random - b.random)
       .slice(0, 20);
 
     res.json({
       hasTickets: true,
-      profiles: candidates.map((u) => ({ ...publicUser(u), sharedEvents: sharedEvents(me.id, u.id) })),
+      profiles: candidates.map(({ u, acts }) => ({ ...pub(u), sharedEvents: sharedEvents(me.id, u.id), sharedActs: acts })),
     });
   });
 
@@ -468,8 +562,9 @@ function createApp({
       const [a, b] = me.id < target.id ? [me.id, target.id] : [target.id, me.id];
       q('INSERT OR IGNORE INTO matches (user_a, user_b) VALUES (?, ?)').run(a, b);
       const row = q('SELECT * FROM matches WHERE user_a = ? AND user_b = ?').get(a, b);
-      match = { id: row.id, user: publicUser(target), sharedEvents: sharedEvents(me.id, target.id) };
-      realtime.send(target.id, 'match', { id: row.id, user: publicUser(me), sharedEvents: match.sharedEvents });
+      const acts = sharedActs(me.id, target.id);
+      match = { id: row.id, user: pub(target), sharedEvents: sharedEvents(me.id, target.id), sharedActs: acts };
+      realtime.send(target.id, 'match', { id: row.id, user: pub(me), sharedEvents: match.sharedEvents, sharedActs: acts });
       notify(target.id, {
         title: "It's a match",
         body: `Jij en ${me.name} gaan allebei naar ${match.sharedEvents.map((e) => e.name).join(' & ')}`,
@@ -494,7 +589,7 @@ function createApp({
     const matches = rows
       .map((r) => ({
         id: r.match_id,
-        user: publicUser(r),
+        user: pub(r),
         sharedEvents: sharedEvents(me, r.id),
         lastMessage: r.last_body == null ? null : { body: r.last_body, senderId: r.last_sender, createdAt: r.last_at },
       }))
@@ -506,7 +601,10 @@ function createApp({
     const match = getMatchFor(Number(req.params.id), req.user.id);
     const other = q('SELECT * FROM users WHERE id = ?').get(match.otherId);
     const messages = q('SELECT * FROM messages WHERE match_id = ? ORDER BY id').all(match.id).map(messageJson);
-    res.json({ match: { id: match.id, user: publicUser(other), sharedEvents: sharedEvents(req.user.id, other.id) }, messages });
+    res.json({
+      match: { id: match.id, user: pub(other), sharedEvents: sharedEvents(req.user.id, other.id), sharedActs: sharedActs(req.user.id, other.id) },
+      messages,
+    });
   });
 
   app.post('/api/matches/:id/messages', requireUser, (req, res) => {

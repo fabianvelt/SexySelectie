@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const SCHEMA = `
@@ -116,7 +117,45 @@ CREATE TABLE IF NOT EXISTS email_codes (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   UNIQUE (user_id, purpose)
 );
+
+-- Profielfoto's (max. 6 per gebruiker; position 0 is de hoofdfoto). Het id is
+-- willekeurig, zodat niemand door de foto's van anderen kan bladeren.
+CREATE TABLE IF NOT EXISTS photos (
+  id         TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  position   INTEGER NOT NULL,
+  mime       TEXT NOT NULL,
+  data       BLOB NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS photos_user ON photos(user_id, position);
+
+-- Line-up per evenement, en welke acts iemand wil zien.
+CREATE TABLE IF NOT EXISTS acts (
+  id       INTEGER PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  name     TEXT NOT NULL,
+  UNIQUE (event_id, name)
+);
+CREATE TABLE IF NOT EXISTS user_acts (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  act_id  INTEGER NOT NULL REFERENCES acts(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, act_id)
+);
+CREATE INDEX IF NOT EXISTS user_acts_act ON user_acts(act_id);
 `;
+
+const newPhotoId = () => crypto.randomBytes(12).toString('base64url');
+
+// Zet een foto (als data-URL) in de photos-tabel. Geeft het id terug.
+function insertPhoto(db, userId, dataUrl, position) {
+  const [, mime, base64] = dataUrl.match(/^data:(image\/(?:jpeg|png|webp));base64,(.*)$/s) || [];
+  if (!mime) return null;
+  const id = newPhotoId();
+  db.prepare('INSERT INTO photos (id, user_id, position, mime, data) VALUES (?, ?, ?, ?, ?)')
+    .run(id, userId, position, mime, Buffer.from(base64, 'base64'));
+  return id;
+}
 
 // Kolommen die later zijn toegevoegd. CREATE TABLE IF NOT EXISTS voegt ze niet
 // toe aan een bestaande database, dus dat doen we hier.
@@ -126,6 +165,12 @@ function migrate(db) {
     db.exec('ALTER TABLE users ADD COLUMN email_verified_at TEXT');
     // Accounts van vóór e-mailbevestiging niet ineens blokkeren.
     db.exec('UPDATE users SET email_verified_at = created_at');
+  }
+  // Vroeger stond er één foto als data-URL in users.photo; die verhuist naar photos.
+  for (const u of db.prepare('SELECT id, photo FROM users WHERE photo IS NOT NULL').all()) {
+    const has = db.prepare('SELECT 1 FROM photos WHERE user_id = ?').get(u.id);
+    if (!has) insertPhoto(db, u.id, u.photo, 0);
+    db.prepare('UPDATE users SET photo = NULL WHERE id = ?').run(u.id);
   }
 }
 
@@ -139,4 +184,4 @@ function openDb(file = ':memory:') {
   return db;
 }
 
-module.exports = { openDb };
+module.exports = { openDb, insertPhoto };

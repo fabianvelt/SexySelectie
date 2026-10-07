@@ -1,7 +1,7 @@
 // Service worker: maakt de app installeerbaar en laat hem openen zonder netwerk.
 // Strategie: eerst netwerk (zodat je altijd de nieuwste versie krijgt), bij
 // geen verbinding de opgeslagen versie. De API wordt nooit gecachet.
-const CACHE = 'sexyselectie-v3';
+const CACHE = 'sexyselectie-v4';
 const SHELL = ['/', '/app.js', '/styles.css', '/legal.css', '/fonts/instrument-serif.woff2', '/fonts/instrument-serif-italic.woff2', '/manifest.webmanifest', '/icons/icon-192.png', '/offline.html'];
 
 self.addEventListener('install', (event) => {

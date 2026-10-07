@@ -23,7 +23,7 @@ npm start        # http://localhost:3000
 
 | Onderdeel | Waar |
 |---|---|
-| Database (SQLite): gebruikers, tickets, swipes, matches, berichten | `server/db.js` |
+| Database (SQLite): gebruikers, foto's, tickets, line-ups, swipes, matches, berichten | `server/db.js` |
 | API: account, tickets, ontdekken, swipen, matches, chat | `server/app.js` |
 | Ticketverificatie | `server/tickets.js` |
 | Realtime matches en berichten (Server-Sent Events) | `server/realtime.js` |
@@ -39,6 +39,8 @@ npm start        # http://localhost:3000
 - Voorkeuren werken in twee richtingen: jij moet in hun voorkeur passen en zij in die van jou.
 - Je kunt alleen swipen op iemand met wie je een evenement deelt, dus ook niet via de API om de app heen.
 - Een ticket kan maar door één account geclaimd worden. We bewaren alleen een hash van de ticketcode.
+- Per profiel maximaal 6 foto's (JPEG, PNG of WebP, gecontroleerd op inhoud). Foto's zijn alleen op te halen als je bent ingelogd, via een id dat niet te raden is.
+- Je kiest alleen acts uit de line-up van een evenement waarvoor je een ticket hebt. Wie dezelfde acts wil zien, staat eerder in je stapel en op de kaart staat "Allebei naar …".
 - Alleen de twee mensen in een match kunnen de chat lezen. Bij unmatchen worden de berichten verwijderd.
 - Melden en blokkeren werkt in twee richtingen: jullie zien elkaar nergens meer terug. Een melding komt in de lijst van `npm run admin -- reports`.
 - Pas na het bevestigen van je e-mailadres ben je zichtbaar voor anderen en kun je swipen en chatten. Tickets scannen en je profiel invullen kan al eerder.
@@ -74,6 +76,8 @@ Op de server (`fly ssh console`, daarna `cd /app`), of lokaal met dezelfde `DB_F
 npm run admin -- add-event mijnfestival-2027 "Festivalnaam" "Locatie" "Stad" 2027-08-20T12:00:00+02:00 2027-08-23T02:00:00+02:00
 npm run admin -- events
 npm run admin -- tickets mijnfestival-2027 500 > codes.csv   # ticketcodes om als QR-code uit te delen
+npm run admin -- lineup mijnfestival-2027 "Act 1" "Act 2"     # line-up invoeren (zonder namen: tonen)
+npm run admin -- remove-act mijnfestival-2027 "Act 1"
 npm run admin -- reports                                  # open meldingen
 npm run admin -- handle-report 3
 npm run admin -- verify-user iemand@example.com           # e-mailadres handmatig bevestigen

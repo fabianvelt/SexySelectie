@@ -9,7 +9,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { openDb } = require('../server/db');
+const { openDb, insertPhoto } = require('../server/db');
 const { hashPassword } = require('../server/auth');
 const { createTicketCode, hashTicketCode } = require('../server/tickets');
 
@@ -24,6 +24,13 @@ const EVENTS = [
   { id: 'duinbeats-2026', name: 'Duinbeats', venue: 'De Duinen', city: 'Bloemendaal', starts_at: days(30), ends_at: days(32) },
 ];
 
+// Verzonnen acts, zodat de demo laat zien hoe gedeelde acts werken.
+const LINEUPS = {
+  'zomerzon-2026': ['Nova Lux', 'Kaapse Kade', 'Mira Sol', 'De Nachtploeg', 'Velvet Tide', 'Zuidwester', 'Lune & Laurens', 'Polderpop Collectief'],
+  'nachtlicht-rave': ['Kelderlicht', 'Mono Ritueel', 'Staalgrijs', 'Vera Volt', 'Ondergrond Trio', 'Neonmeisjes'],
+  'duinbeats-2026': ['Helmgras', 'Strandjutters', 'Mira Sol', 'Golfslag', 'Zilte Zondag', 'Kustkoor'],
+};
+
 const PEOPLE = [
   ['Sanne', 'woman', 'men', '1999-04-12', 'Altijd vooraan bij de mainstage 🎶', ['zomerzon-2026', 'duinbeats-2026']],
   ['Lotte', 'woman', 'everyone', '2001-08-03', 'Techno, zonnebrand en glitter.', ['nachtlicht-rave']],
@@ -36,10 +43,12 @@ const PEOPLE = [
 ];
 
 // Sfeerillustraties (silhouetten, geen echte mensen) zodat de demo laat zien
-// hoe profielfoto's de app inkleuren.
-function demoPhoto(name) {
-  const file = path.join(__dirname, 'demo-photos', `${name.toLowerCase()}.jpg`);
-  return fs.existsSync(file) ? `data:image/jpeg;base64,${fs.readFileSync(file).toString('base64')}` : null;
+// hoe profielfoto's de app inkleuren. Per persoon drie: naam.jpg, naam-2.jpg, naam-3.jpg.
+function demoPhotos(name) {
+  return ['', '-2', '-3']
+    .map((suffix) => path.join(__dirname, 'demo-photos', `${name.toLowerCase()}${suffix}.jpg`))
+    .filter((file) => fs.existsSync(file))
+    .map((file) => `data:image/jpeg;base64,${fs.readFileSync(file).toString('base64')}`);
 }
 
 const db = openDb(DB_FILE);
@@ -48,6 +57,8 @@ const upsertEvent = db.prepare(`INSERT INTO events (id, name, venue, city, start
   ON CONFLICT (id) DO UPDATE SET name = excluded.name, venue = excluded.venue, city = excluded.city,
                                  starts_at = excluded.starts_at, ends_at = excluded.ends_at`);
 for (const e of EVENTS) upsertEvent.run(e.id, e.name, e.venue, e.city, e.starts_at, e.ends_at);
+const addAct = db.prepare('INSERT OR IGNORE INTO acts (event_id, name) VALUES (?, ?)');
+for (const [eventId, acts] of Object.entries(LINEUPS)) for (const act of acts) addAct.run(eventId, act);
 
 const password = hashPassword('demo1234');
 const demoIds = [];
@@ -55,18 +66,26 @@ for (const [name, gender, interest, birthdate, bio, events] of PEOPLE) {
   const email = `${name.toLowerCase()}@demo.sexyselectie.nl`;
   let user = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
   if (!user) {
-    const { lastInsertRowid } = db.prepare(`INSERT INTO users (email, password_hash, name, birthdate, gender, interested_in, bio, photo, email_verified_at)
-                                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
-      .run(email, password, name, birthdate, gender, interest, bio, demoPhoto(name));
+    const { lastInsertRowid } = db.prepare(`INSERT INTO users (email, password_hash, name, birthdate, gender, interested_in, bio, email_verified_at)
+                                           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+      .run(email, password, name, birthdate, gender, interest, bio);
     user = { id: lastInsertRowid };
-  } else {
-    db.prepare('UPDATE users SET photo = COALESCE(photo, ?) WHERE id = ?').run(demoPhoto(name), user.id);
+  }
+  if (!db.prepare('SELECT 1 FROM photos WHERE user_id = ?').get(user.id)) {
+    demoPhotos(name).forEach((photo, i) => insertPhoto(db, user.id, photo, i));
   }
   demoIds.push(user.id);
   for (const eventId of events) {
     const code = createTicketCode(TICKET_SECRET, eventId, `DEMO${name.toUpperCase()}`);
     db.prepare('INSERT OR IGNORE INTO tickets (code_hash, event_id, user_id) VALUES (?, ?, ?)')
       .run(hashTicketCode(code), eventId, user.id);
+    // Elk demo-profiel kiest een paar acts, steeds dezelfde (op basis van de naam).
+    const acts = db.prepare('SELECT id FROM acts WHERE event_id = ? ORDER BY name').all(eventId);
+    const offset = [...name].reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+    for (let i = 0; i < Math.min(3, acts.length); i++) {
+      db.prepare('INSERT OR IGNORE INTO user_acts (user_id, act_id) VALUES (?, ?)')
+        .run(user.id, acts[(offset + i * 3) % acts.length].id);
+    }
   }
 }
 

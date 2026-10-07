@@ -3,6 +3,9 @@
 //   npm run admin -- events
 //   npm run admin -- add-event <id> "<naam>" "<locatie>" "<stad>" <start ISO> <eind ISO>
 //   npm run admin -- tickets <eventId> <aantal>        (print codes als CSV)
+//   npm run admin -- lineup <eventId>                  (toon de line-up)
+//   npm run admin -- lineup <eventId> "Act 1" "Act 2"  (acts toevoegen)
+//   npm run admin -- remove-act <eventId> "Act"
 //   npm run admin -- reports                           (open meldingen)
 //   npm run admin -- handle-report <id>
 //   npm run admin -- delete-user <e-mail>
@@ -63,6 +66,28 @@ switch (command) {
     }
     break;
   }
+  case 'lineup': {
+    const [eventId, ...acts] = args;
+    if (!db.prepare('SELECT 1 FROM events WHERE id = ?').get(eventId || '')) fail(`Onbekend evenement: ${eventId}`);
+    const add = db.prepare('INSERT OR IGNORE INTO acts (event_id, name) VALUES (?, ?)');
+    let added = 0;
+    for (const act of acts.map((a) => a.trim()).filter(Boolean)) {
+      if (act.length > 80) fail(`Naam te lang: ${act}`);
+      added += add.run(eventId, act).changes;
+    }
+    if (acts.length) console.log(`${added} act(s) toegevoegd.`);
+    const rows = db.prepare(`SELECT a.name, COUNT(ua.user_id) AS fans FROM acts a LEFT JOIN user_acts ua ON ua.act_id = a.id
+                             WHERE a.event_id = ? GROUP BY a.id ORDER BY a.name COLLATE NOCASE`).all(eventId);
+    if (!rows.length) console.log('Nog geen line-up.');
+    else console.table(rows.map((r) => ({ act: r.name, 'wil erheen': r.fans })));
+    break;
+  }
+  case 'remove-act': {
+    const [eventId, act] = args;
+    const { changes } = db.prepare('DELETE FROM acts WHERE event_id = ? AND name = ?').run(eventId || '', act || '');
+    console.log(changes ? 'Act verwijderd.' : 'Act niet gevonden.');
+    break;
+  }
   case 'reports': {
     const rows = db.prepare(`SELECT r.id, r.reason, r.details, r.created_at, ru.email AS melder, tu.email AS gemeld, tu.name
                              FROM reports r LEFT JOIN users ru ON ru.id = r.reporter_id LEFT JOIN users tu ON tu.id = r.reported_id
@@ -88,5 +113,5 @@ switch (command) {
     break;
   }
   default:
-    console.log('Commando\'s: events, add-event, tickets, reports, handle-report, verify-user, delete-user (zie scripts/admin.js)');
+    console.log('Commando\'s: events, add-event, tickets, lineup, remove-act, reports, handle-report, verify-user, delete-user (zie scripts/admin.js)');
 }
